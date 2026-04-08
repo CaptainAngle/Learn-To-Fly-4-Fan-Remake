@@ -23,6 +23,7 @@ class Player:
         self.is_flying = True
         self.is_landed = False
         self.sled_attached = True
+        self.has_been_airborne = False
         
     def update(self, controls, terrain_slope=0.0, boosting=False, grounded=False, surface_friction=0.995, can_rotate=True, dt=1.0 / FPS):
         """Update player position and physics."""
@@ -51,6 +52,9 @@ class Player:
             self.angle = max(-45, min(45, slope_angle))
         
         dt = max(1e-4, dt)
+        if not grounded:
+            self.has_been_airborne = True
+
         if grounded:
             # Grounded ramp slide physics with aero still active (horizontal only).
             pitch = math.radians(self.angle)
@@ -73,17 +77,32 @@ class Player:
             drag_n = q * wing_area * cd
 
             lift_dir_x = -vel_dir_y
+            lift_dir_y = vel_dir_x
             drag_dir_x = -vel_dir_x
+            drag_dir_y = -vel_dir_y
             thrust_x = thrust_n * max(0.0, math.cos(pitch))
+            thrust_y = thrust_n * math.sin(pitch)
 
-            fx_ground = lift_n * lift_dir_x + drag_n * drag_dir_x + thrust_x
+            ground_aero_enabled = self.has_been_airborne
+            fx_ground = 0.0
+            fy_ground = 0.0
+            if ground_aero_enabled:
+                fx_ground = lift_n * lift_dir_x + drag_n * drag_dir_x + thrust_x
+                fy_ground = lift_n * lift_dir_y + drag_n * drag_dir_y + thrust_y - PLAYER_MASS_KG * GRAVITY_MPS2
+
             ax_ground = fx_ground / PLAYER_MASS_KG
             self.vx += (ax_ground * dt) * PIXELS_PER_METER / FPS
+
+            # Allow re-launch: if aero + thrust overcome weight, push upward off the ground.
+            if fy_ground > 0:
+                ay_up = fy_ground / PLAYER_MASS_KG
+                self.vy += (-ay_up * dt) * PIXELS_PER_METER / FPS
 
             # Gravity projected along the slope.
             self.vx += GRAVITY * terrain_slope * 1.5
             self.vx *= surface_friction
-            self.vy = self.vx * terrain_slope
+            if fy_ground <= 0:
+                self.vy = self.vx * terrain_slope
 
             # Launch assist at sharp ramp upturns.
             if terrain_slope < -0.45 and self.vx > 5.0:
@@ -161,6 +180,7 @@ class Player:
         self.is_landed = False
         self.angle = 0
         self.sled_attached = self.sled in SLED_TIERS
+        self.has_been_airborne = False
     
     def equip_sled(self, sled_name):
         if sled_name in SLED_TIERS or sled_name is None:
