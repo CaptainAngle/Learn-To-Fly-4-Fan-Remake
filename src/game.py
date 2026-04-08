@@ -47,6 +47,17 @@ class Game:
         self.mission_completed_this_flight = False
         self.low_speed_frames = 0
         self.shop_catalog_category = None
+        self.toast_text = ""
+        self.toast_color = (225, 235, 248)
+        self.toast_timer = 0.0
+        self.controls_hint_timer = 8.0
+        self.was_ramp_locked = False
+
+    def set_toast(self, text, color=(225, 235, 248), duration=2.0):
+        """Show a short transient message for UX feedback."""
+        self.toast_text = text
+        self.toast_color = color
+        self.toast_timer = max(0.0, float(duration))
     
     def load_or_create_save(self):
         """Load existing save or create new one."""
@@ -149,6 +160,7 @@ class Game:
         self.flight_coins_earned = 0
         self.mission_completed_this_flight = False
         self.low_speed_frames = 0
+        self.was_ramp_locked = False
         
         self.player.equip_sled(self.game_data["equipped_sled"])
         self.player.equip_glider(self.game_data["equipped_glider"])
@@ -166,6 +178,17 @@ class Game:
                 if event.key == pygame.K_ESCAPE:
                     self.state = STATE_MENU
                     self.save_game()
+                elif event.key == pygame.K_RETURN:
+                    if self.state == STATE_MENU:
+                        self.state = STATE_MISSION_SELECT
+                    elif self.state == STATE_MISSION_SELECT:
+                        mission = self.mission_manager.select_mission(1)
+                        if mission:
+                            self.start_flight()
+                    elif self.state == STATE_RESULTS:
+                        self.state = STATE_MENU
+                elif event.key == pygame.K_b and self.state in (STATE_UPGRADE, STATE_MISSION_SELECT):
+                    self.state = STATE_MENU
             
             if event.type == pygame.MOUSEBUTTONDOWN:
                 mouse_pos = pygame.mouse.get_pos()
@@ -267,6 +290,7 @@ class Game:
             equip_fn(gear_name)
             self.game_data[equip_key] = gear_name
             self.save_game()
+            self.set_toast(f"Equipped {gear_info['name']}", (120, 210, 150), duration=1.8)
         else:
             if self.player.coins >= gear_info["cost"]:
                 self.player.coins -= gear_info["cost"]
@@ -274,6 +298,10 @@ class Game:
                 equip_fn(gear_name)
                 self.game_data[equip_key] = gear_name
                 self.save_game()
+                self.set_toast(f"Purchased {gear_info['name']}", (120, 210, 150), duration=2.1)
+            else:
+                need = gear_info["cost"] - self.player.coins
+                self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
 
     def try_purchase_ramp_height(self):
         """Advance the launch ramp height upgrade."""
@@ -287,6 +315,10 @@ class Game:
             self.player.coins -= next_tier["cost"]
             self.game_data["ramp_height_level"] = next_level
             self.save_game()
+            self.set_toast(f"Ramp Height upgraded to Lv {next_level + 1}", (120, 210, 150), duration=2.0)
+        else:
+            need = next_tier["cost"] - self.player.coins
+            self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
 
     def try_purchase_ramp_drop(self):
         """Advance the downhill ramp depth upgrade."""
@@ -300,6 +332,10 @@ class Game:
             self.player.coins -= next_tier["cost"]
             self.game_data["ramp_drop_level"] = next_level
             self.save_game()
+            self.set_toast(f"Ramp Length upgraded to Lv {next_level + 1}", (120, 210, 150), duration=2.0)
+        else:
+            need = next_tier["cost"] - self.player.coins
+            self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
 
     def get_catalog_entries(self, category):
         """Return ordered gear tuples for the selected shop catalog."""
@@ -339,25 +375,36 @@ class Game:
             vy0 -= vn_inward * ny
 
         tangential_speed = (vx0 * tx) + (vy0 * ty)
-        tangential_speed = max(0.0, tangential_speed)
 
         if preserve_ratio > 0.0:
             # Preserve some pre-impact speed through sharp kink transitions on ice.
-            tangential_speed = max(tangential_speed, math.hypot(self.player.vx, self.player.vy) * preserve_ratio)
+            preserve_speed = math.hypot(self.player.vx, self.player.vy) * preserve_ratio
+            if abs(tangential_speed) < preserve_speed:
+                # Do not force a direction when nearly stopped.
+                if tangential_speed > 1e-6:
+                    tangential_speed = preserve_speed
+                elif tangential_speed < -1e-6:
+                    tangential_speed = -preserve_speed
 
         self.player.vx = tx * tangential_speed
         self.player.vy = ty * tangential_speed
     
     def update(self, controls, dt=1.0 / FPS):
         """Update game state."""
+        if self.toast_timer > 0.0:
+            self.toast_timer = max(0.0, self.toast_timer - dt)
+
         if self.state == STATE_PLAYING:
+            self.controls_hint_timer = max(0.0, self.controls_hint_timer - dt)
             prev_x = self.player.x
             prev_y = self.player.y
+            prev_speed = math.hypot(self.player.vx, self.player.vy)
 
             terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
             slope = self._get_terrain_slope_at_x(self.player.x)
             surface_type = self.environment.terrain.get_surface_type_at(self.player.x)
             force_ramp_lock = (surface_type == "ice" and self.player.x <= self.environment.terrain.ice_end_x)
+            left_ramp_this_frame = self.was_ramp_locked and (not force_ramp_lock)
 
             # Ground contact: allow small tolerance so steep up-ramp transitions stay attached.
             bottom = self.player.y + self.player.size
@@ -392,9 +439,10 @@ class Game:
                 sled_mult = SLED_TIERS[self.player.sled]["ramp_friction_mult"]
                 friction = min(0.9995, friction * sled_mult)
 
-            # Ramp friction tuning: heavily reduce effective drag loss on ramp ice.
+            # Ramp friction framework is preserved, but current tuning is true no-loss on ramp.
             if grounded and surface_type == "ice":
-                friction = 1.0 - ((1.0 - friction) / RAMP_FRICTION_LOSS_DIVISOR)
+                _ramp_friction_preview = 1.0 - ((1.0 - friction) / RAMP_FRICTION_LOSS_DIVISOR)
+                friction = 1.0
 
 
             self.player.update(
@@ -456,6 +504,17 @@ class Game:
                 self._project_velocity_to_slope(lock_slope, preserve_ratio=0.0)
                 grounded = True
                 slope = lock_slope
+
+            # Keep launch transition continuous: no sudden speed pop on ramp exit.
+            if left_ramp_this_frame and not controls.get("boost", False):
+                current_speed = math.hypot(self.player.vx, self.player.vy)
+                max_exit_speed = (prev_speed * 1.02) + 0.08
+                if current_speed > max_exit_speed and current_speed > 1e-6:
+                    scale = max_exit_speed / current_speed
+                    self.player.vx *= scale
+                    self.player.vy *= scale
+
+            self.was_ramp_locked = (self.environment.terrain.get_surface_type_at(self.player.x) == "ice" and self.player.x <= self.environment.terrain.ice_end_x)
 
             self.environment.update()
 
@@ -564,10 +623,15 @@ class Game:
             self.ui_manager.draw_stats(self.screen, self.player, self.environment)
             terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
             self.ui_manager.draw_flight_hud(self.screen, self.player, terrain_y)
+            if self.controls_hint_timer > 0.0:
+                self.ui_manager.draw_controls_hint(self.screen)
             
             # Draw mission progress bar
             if self.mission_manager.current_mission:
                 self.ui_manager.draw_mission_progress(self.screen, self.player, self.mission_manager.current_mission)
+
+        if self.toast_timer > 0.0 and self.toast_text:
+            self.ui_manager.draw_toast(self.screen, self.toast_text, self.toast_color)
         
         elif self.state == STATE_RESULTS:
             for button in self.buttons["results"]:
@@ -580,10 +644,24 @@ class Game:
     
     def run(self):
         """Main game loop."""
+        fixed_dt = 1.0 / FPS
+        accumulator = 0.0
         while self.running:
-            dt = self.clock.tick(FPS) / 1000.0
+            frame_dt = self.clock.tick(FPS) / 1000.0
+            # Clamp long frames to avoid giant catch-up jumps after stalls.
+            frame_dt = min(frame_dt, 0.1)
+            accumulator += frame_dt
+
             controls = self.handle_input()
-            self.update(controls, dt)
+            substeps = 0
+            while accumulator >= fixed_dt and substeps < 4:
+                self.update(controls, fixed_dt)
+                accumulator -= fixed_dt
+                substeps += 1
+
+            # If rendering outpaces updates, still step once so controls feel responsive.
+            if substeps == 0:
+                self.update(controls, fixed_dt)
             self.draw()
         
         pygame.quit()

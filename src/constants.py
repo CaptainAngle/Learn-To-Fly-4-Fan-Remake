@@ -1,13 +1,13 @@
 # Game Constants
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 800
-FPS = 60
+FPS = 120
 
 # Physics
 GRAVITY = 0.35
 MAX_VELOCITY = 32
 BOOST_FORCE = 0.9
-ROTATION_SPEED = 1.5
+ROTATION_SPEED = 0.75
 PIXELS_PER_METER = 100
 WORLD_LENGTH_M = 1000
 
@@ -75,16 +75,28 @@ BOOSTER_TIERS = {
 }
 
 RAMP_HEIGHT_TIERS = [
-    {"name": "Base Ramp", "launch_gap_m": 3.0, "cost": 0},
-    {"name": "Raised Ramp", "launch_gap_m": 4.0, "cost": 350},
-    {"name": "Tall Ramp", "launch_gap_m": 5.0, "cost": 900},
-    {"name": "High Ramp", "launch_gap_m": 6.5, "cost": 1700},
+    {"name": "Ramp Height Lv1", "launch_gap_m": 1.0, "cost": 0},
+    {"name": "Ramp Height Lv2", "launch_gap_m": 1.4, "cost": 200},
+    {"name": "Ramp Height Lv3", "launch_gap_m": 1.9, "cost": 380},
+    {"name": "Ramp Height Lv4", "launch_gap_m": 2.5, "cost": 620},
+    {"name": "Ramp Height Lv5", "launch_gap_m": 3.2, "cost": 920},
+    {"name": "Ramp Height Lv6", "launch_gap_m": 4.0, "cost": 1280},
+    {"name": "Ramp Height Lv7", "launch_gap_m": 4.9, "cost": 1720},
+    {"name": "Ramp Height Lv8", "launch_gap_m": 5.9, "cost": 2240},
+    {"name": "Ramp Height Lv9", "launch_gap_m": 7.0, "cost": 2860},
+    {"name": "Ramp Height Lv10", "launch_gap_m": 8.2, "cost": 3600},
 ]
 
 RAMP_DROP_TIERS = [
-    {"name": "Shallow Drop", "extra_drop_m": 0.0, "cost": 0},
-    {"name": "Deeper Drop", "extra_drop_m": 0.5, "cost": 450},
-    {"name": "Steep Drop", "extra_drop_m": 1.0, "cost": 1100},
-    {"name": "Extreme Drop", "extra_drop_m": 1.6, "cost": 2100},
+    {"name": "Ramp Length Lv1", "extra_drop_m": 0.00, "cost": 0},
+    {"name": "Ramp Length Lv2", "extra_drop_m": 0.20, "cost": 220},
+    {"name": "Ramp Length Lv3", "extra_drop_m": 0.42, "cost": 440},
+    {"name": "Ramp Length Lv4", "extra_drop_m": 0.66, "cost": 700},
+    {"name": "Ramp Length Lv5", "extra_drop_m": 0.92, "cost": 1020},
+    {"name": "Ramp Length Lv6", "extra_drop_m": 1.20, "cost": 1410},
+    {"name": "Ramp Length Lv7", "extra_drop_m": 1.50, "cost": 1870},
+    {"name": "Ramp Length Lv8", "extra_drop_m": 1.82, "cost": 2420},
+    {"name": "Ramp Length Lv9", "extra_drop_m": 2.16, "cost": 3060},
+    {"name": "Ramp Length Lv10", "extra_drop_m": 2.52, "cost": 3820},
 ]
 

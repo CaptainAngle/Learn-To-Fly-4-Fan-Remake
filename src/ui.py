@@ -45,6 +45,28 @@ class UIManager:
         """Draw text on surface."""
         text_surf = font.render(text, True, color)
         surface.blit(text_surf, (x, y))
+
+    def draw_toast(self, surface, text, color=(225, 235, 248)):
+        """Draw a centered transient notification panel."""
+        panel_w = min(640, max(260, 24 + len(text) * 8))
+        panel_h = 44
+        x = (SCREEN_WIDTH - panel_w) // 2
+        y = 18
+        pygame.draw.rect(surface, (22, 34, 48), (x, y, panel_w, panel_h), border_radius=10)
+        pygame.draw.rect(surface, (100, 150, 200), (x, y, panel_w, panel_h), 1, border_radius=10)
+        pygame.draw.rect(surface, (245, 245, 250), (x, y, panel_w, panel_h), 2, border_radius=10)
+        text_surf = self.font_medium.render(text, True, color)
+        text_rect = text_surf.get_rect(center=(x + panel_w // 2, y + panel_h // 2))
+        surface.blit(text_surf, text_rect)
+
+    def draw_controls_hint(self, surface):
+        """Draw a short in-flight controls reminder."""
+        panel = pygame.Rect(16, SCREEN_HEIGHT - 78, 260, 58)
+        pygame.draw.rect(surface, (20, 35, 50), panel, border_radius=8)
+        pygame.draw.rect(surface, (100, 150, 200), panel, 1, border_radius=8)
+        pygame.draw.rect(surface, (245, 245, 250), panel, 2, border_radius=8)
+        self.draw_text(surface, "Controls", self.font_small, (220, 235, 248), panel.x + 10, panel.y + 8)
+        self.draw_text(surface, "A/D rotate    W/SPACE boost", self.font_small, (190, 215, 238), panel.x + 10, panel.y + 30)
     
     def draw_stats(self, surface, player, environment):
         """Draw in-game stats."""
@@ -133,7 +155,7 @@ class UIManager:
         # Speed value mapped to dial (px/frame to approx m/s).
         speed_px = math.hypot(player.vx, player.vy)
         speed_mps = speed_px * 60 / PIXELS_PER_METER
-        speed_max = 80.0
+        speed_max = 180.0
         speed_pct = min(1.0, speed_mps / speed_max)
         needle_ang = math.radians(210 - 180 * speed_pct)
         needle_len = dial_r - 10
@@ -174,6 +196,17 @@ class UIManager:
         alt_unit = self.font_small.render("m", True, (200, 220, 240))
         surface.blit(alt_val, (panel_x + 125, panel_y + 58))
         surface.blit(alt_unit, (panel_x + 128, panel_y + 87))
+
+        # Engine + fuel status for clearer moment-to-moment feedback.
+        thrust_text = "THRUST ON" if player.is_thrusting else "THRUST OFF"
+        thrust_color = (255, 175, 90) if player.is_thrusting else (165, 185, 205)
+        self.draw_text(surface, thrust_text, self.font_small, thrust_color, panel_x + 18, panel_y + 124)
+
+        if player.max_fuel > 0:
+            fuel_ratio = player.fuel / max(1.0, player.max_fuel)
+            if fuel_ratio <= 0.2:
+                warn_color = (255, 130, 110) if (pygame.time.get_ticks() // 220) % 2 == 0 else (255, 190, 150)
+                self.draw_text(surface, "LOW FUEL", self.font_small, warn_color, panel_x + 120, panel_y + 124)
     
     def draw_menu(self, surface, buttons):
         """Draw main menu."""

@@ -9,6 +9,7 @@ class Player:
         self.y = y
         self.vx = 0  # velocity x
         self.vy = 0  # velocity y
+        self.start_x = x
         self.size = 13
         self.angle = 0  # rotation angle
         
@@ -45,13 +46,13 @@ class Player:
         # Handle pitch: manual in air, automatic on ramp when locked.
         if can_rotate:
             if controls.get("left"):
-                self.angle = min(self.angle + ROTATION_SPEED, 45)
+                self.angle = self.angle + ROTATION_SPEED
             elif controls.get("right"):
-                self.angle = max(self.angle - ROTATION_SPEED, -45)
+                self.angle = self.angle - ROTATION_SPEED
         else:
             # Align to slope when on ramp (y grows downward on screen).
             slope_angle = -math.degrees(math.atan(terrain_slope))
-            self.angle = max(-45, min(45, slope_angle))
+            self.angle = slope_angle
         
         dt = max(1e-4, dt)
         if not grounded:
@@ -86,14 +87,16 @@ class Player:
             lift_dir_y = vel_dir_x
             drag_dir_x = -vel_dir_x
             drag_dir_y = -vel_dir_y
-            thrust_x = thrust_n * max(0.0, math.cos(pitch))
+            # Allow thrust component to go negative so reverse flight is possible.
+            thrust_x = thrust_n * math.cos(pitch)
             thrust_y = thrust_n * math.sin(pitch)
 
             ground_aero_enabled = self.has_been_airborne
             fx_ground = 0.0
             fy_ground = 0.0
             if ground_aero_enabled:
-                fx_ground = 0.0
+                # Signed horizontal thrust enables intentional braking/reverse while grounded.
+                fx_ground = thrust_x
                 fy_ground = lift_n * lift_dir_y + drag_n * drag_dir_y + thrust_y - PLAYER_MASS_KG * GRAVITY_MPS2
 
             ax_ground = fx_ground / PLAYER_MASS_KG
@@ -171,9 +174,9 @@ class Player:
         self.x += self.vx * step_scale
         self.y += self.vy * step_scale
         
-        # Track distance (horizontal only)
-        if self.vx > 0:
-            self.distance_traveled += (self.vx * step_scale) / PIXELS_PER_METER
+        # Track best forward progress from launch point (supports reverse flight cleanly).
+        progress_m = max(0.0, (self.x - self.start_x) / PIXELS_PER_METER)
+        self.distance_traveled = max(self.distance_traveled, progress_m)
     
     def check_landing(self, terrain_y):
         """Check if player lands on ground."""
@@ -188,6 +191,7 @@ class Player:
         """Reset player for new attempt."""
         self.x = 100
         self.y = 200
+        self.start_x = self.x
         self.vx = 0
         self.vy = 0
         self.fuel = self.max_fuel

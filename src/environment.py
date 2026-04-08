@@ -31,20 +31,19 @@ class Terrain:
         # Ramp-drop upgrade raises only the start section; launch piece/lip anchors remain fixed.
         launch_anchors = [
             (0, start_y - extra_drop_px),
-            (360, start_y + 8 - extra_drop_px),      # Longer near-flat entry
-            (760, start_y + 360),                     # Steeper and deeper downhill
+            (200, start_y + 8 - extra_drop_px),      # Shorter top near-flat entry
+            (520, start_y + 360),                     # Steeper main downhill acceleration section
             (980, start_y + 365),                     # Short center settle section
-            (1120, start_y + 170),                    # Half-length recovery climb toward launch
-            (1135, start_y + 161),                    # Extra-short launch exit segment
+            # Recovery climb is reduced in height (Y), not shortened in X.
+            (1260, start_y + 262),
         ]
 
         launch_points = self._build_smooth_ramp_points(launch_anchors, samples_per_segment=24)
 
-        lowest_ramp_y = max(y for _, y in launch_points)
-        launch_off_y = launch_anchors[-1][1]  # launch lip height
+        bottom_flat_y = launch_anchors[3][1]
 
-        # Keep snow well below the whole ramp assembly so the lip genuinely launches into air.
-        snow_y = lowest_ramp_y + (launch_gap_m * PIXELS_PER_METER)
+        # Ramp height is measured from the bottom flat section to the snow surface.
+        snow_y = bottom_flat_y + (launch_gap_m * PIXELS_PER_METER)
         self.points.extend(launch_points)
 
         # Immediate near-vertical drop right from the launch lip.
