@@ -245,26 +245,75 @@ class Game:
                 self.game_data[unlock_key].append(gear_name)
                 equip_fn(gear_name)
                 self.game_data[equip_key] = gear_name
+
+    def _get_terrain_slope_at_x(self, x):
+        """Return terrain slope under a world x position."""
+        points = self.environment.terrain.points
+        for i in range(len(points) - 1):
+            x1, y1 = points[i]
+            x2, y2 = points[i + 1]
+            if x1 <= x <= x2:
+                dx = (x2 - x1)
+                return ((y2 - y1) / dx) if dx != 0 else 0.0
+        return 0.0
+
+    def _project_velocity_to_slope(self, slope, preserve_ratio=0.0):
+        """Resolve ground contact by removing inward normal velocity and keeping tangent motion."""
+        vx0 = self.player.vx
+        vy0 = self.player.vy
+        norm = math.sqrt(1.0 + slope * slope)
+        tx = 1.0 / norm
+        ty = slope / norm
+
+        # Inward normal (toward ground in screen-space y-down coordinates).
+        nx = -slope / norm
+        ny = 1.0 / norm
+        vn_inward = (vx0 * nx) + (vy0 * ny)
+        if vn_inward > 0.0:
+            vx0 -= vn_inward * nx
+            vy0 -= vn_inward * ny
+
+        tangential_speed = (vx0 * tx) + (vy0 * ty)
+        tangential_speed = max(0.0, tangential_speed)
+
+        if preserve_ratio > 0.0:
+            # Preserve some pre-impact speed through sharp kink transitions on ice.
+            tangential_speed = max(tangential_speed, math.hypot(self.player.vx, self.player.vy) * preserve_ratio)
+
+        self.player.vx = tx * tangential_speed
+        self.player.vy = ty * tangential_speed
     
     def update(self, controls, dt=1.0 / FPS):
         """Update game state."""
         if self.state == STATE_PLAYING:
+            prev_x = self.player.x
+            prev_y = self.player.y
+
             terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
-            slope = self.environment.terrain.apply_ramp_boost(self.player, terrain_y)
+            slope = self._get_terrain_slope_at_x(self.player.x)
             surface_type = self.environment.terrain.get_surface_type_at(self.player.x)
 
-            # Ground contact: slide on ramp when touching terrain, otherwise airborne.
-            grounded = self.player.y + self.player.size >= terrain_y - 2 and self.player.vy >= -1.5
+            # Ground contact: allow small tolerance so steep up-ramp transitions stay attached.
+            bottom = self.player.y + self.player.size
+            grounded = (bottom >= terrain_y - 3) and (bottom <= terrain_y + 18)
             if grounded:
                 self.player.y = terrain_y - self.player.size
 
             # Material friction: ice is slippery, snow is much stickier.
             if surface_type == "ice":
-                friction = 0.998
+                friction = ICE_FRICTION
             elif surface_type == "snow":
-                friction = 0.985
+                friction = SNOW_FRICTION
             else:
-                friction = 0.995
+                friction = DEFAULT_GROUND_FRICTION
+
+            # Mid-ramp flat ice should carry speed with much less drag.
+            if grounded and surface_type == "ice" and abs(slope) <= FLAT_ICE_SLOPE_THRESHOLD:
+                friction = max(friction, FLAT_ICE_FRICTION)
+
+            # Very low slope: treat as effectively zero friction (no drag).
+            if grounded and surface_type == "ice" and abs(slope) <= ZERO_FRICTION_SLOPE_THRESHOLD:
+                friction = 1.0
 
             # Sled detaches once the penguin leaves the launch ramp geometry.
             if self.player.sled_attached and self.player.x > (self.environment.terrain.ice_end_x + 2):
@@ -285,6 +334,47 @@ class Game:
                 can_rotate=not (grounded and surface_type == "ice"),
                 dt=dt,
             )
+
+            # Sweep along the frame motion to prevent tunneling through steep ramp segments.
+            dx = self.player.x - prev_x
+            dy = self.player.y - prev_y
+            sweep_steps = max(2, int(abs(dx) / max(2.0, self.player.size * 0.35)) + 1)
+            hit_ground = False
+            for step in range(1, sweep_steps + 1):
+                t = step / float(sweep_steps)
+                sx = prev_x + dx * t
+                sy = prev_y + dy * t
+                sy_bottom = sy + self.player.size
+                sample_ground_y = self.environment.terrain.get_ground_y_at(sx)
+                sample_slope = self._get_terrain_slope_at_x(sx)
+
+                # Ignore near-vertical terrain transitions (e.g., snow step wall).
+                if abs(sample_slope) > 2.5:
+                    continue
+
+                if sy_bottom >= sample_ground_y:
+                    sample_surface = self.environment.terrain.get_surface_type_at(sx)
+                    self.player.x = sx
+                    self.player.y = sample_ground_y - self.player.size
+                    preserve_ratio = 0.9 if (sample_surface == "ice" and abs(sample_slope) < 0.12) else 0.0
+                    self._project_velocity_to_slope(sample_slope, preserve_ratio=preserve_ratio)
+                    slope = sample_slope
+                    surface_type = sample_surface
+                    grounded = True
+                    hit_ground = True
+                    break
+
+            if not hit_ground:
+                terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
+                slope = self._get_terrain_slope_at_x(self.player.x)
+                if abs(slope) <= 2.5 and self.player.y + self.player.size >= terrain_y:
+                    sample_surface = self.environment.terrain.get_surface_type_at(self.player.x)
+                    self.player.y = terrain_y - self.player.size
+                    preserve_ratio = 0.9 if (sample_surface == "ice" and abs(slope) < 0.12) else 0.0
+                    self._project_velocity_to_slope(slope, preserve_ratio=preserve_ratio)
+                    surface_type = sample_surface
+                    grounded = True
+
             self.environment.update()
 
             # End the day if the penguin has effectively stopped.
@@ -406,7 +496,8 @@ class Game:
         # Draw clouds as terrain-anchored world objects behind the ground.
         for cloud in terrain.clouds:
             cx = cloud["x"] - offset * 0.95
-            cy = cloud["y"] - offset_y * 0.10
+            cloud_world_y = terrain.get_ground_y_at(cloud["x"]) - cloud["terrain_gap"]
+            cy = cloud_world_y - offset_y
             s = cloud["s"]
             if -120 < cx < SCREEN_WIDTH + 120:
                 pygame.draw.circle(surface, (248, 248, 248), (int(cx), int(cy)), s)

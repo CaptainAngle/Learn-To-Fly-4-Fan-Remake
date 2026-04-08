@@ -25,7 +25,7 @@ class Terrain:
 
         # Launch section only at the beginning.
         # Profile: almost-flat top -> steep down -> short flat -> ~30deg launch up -> cliff.
-        launch_points = [
+        launch_anchors = [
             (0, start_y),
             (170, start_y + 6),
             (350, start_y + 170),
@@ -34,8 +34,10 @@ class Terrain:
             (620, start_y + 70),
         ]
 
+        launch_points = self._build_smooth_ramp_points(launch_anchors, samples_per_segment=24)
+
         lowest_ramp_y = max(y for _, y in launch_points)
-        launch_off_y = launch_points[-1][1]  # launch lip height
+        launch_off_y = launch_anchors[-1][1]  # launch lip height
 
         # Make snow start much lower than launch-off (approx 10m drop).
         snow_drop_from_launch_m = 1
@@ -74,17 +76,97 @@ class Terrain:
                     'slope': slope,
                 })
 
+    def _build_smooth_ramp_points(self, anchors, samples_per_segment=20):
+        """Generate a smooth shape-preserving polyline from monotonic-x anchor points."""
+        if len(anchors) < 2:
+            return anchors[:]
+
+        n = len(anchors)
+        x_vals = [p[0] for p in anchors]
+        y_vals = [p[1] for p in anchors]
+
+        # Segment secants (dy/dx).
+        secants = []
+        for i in range(n - 1):
+            dx = x_vals[i + 1] - x_vals[i]
+            secants.append((y_vals[i + 1] - y_vals[i]) / dx if dx != 0 else 0.0)
+
+        # PCHIP-style tangents: smooth but no overshoot-induced local hills/valleys.
+        slopes = [0.0] * n
+        slopes[0] = secants[0]
+        slopes[-1] = secants[-1]
+        for i in range(1, n - 1):
+            d0 = secants[i - 1]
+            d1 = secants[i]
+            if d0 == 0.0 or d1 == 0.0 or (d0 > 0.0) != (d1 > 0.0):
+                slopes[i] = 0.0
+            else:
+                slopes[i] = 0.5 * (d0 + d1)
+
+        # Hyman monotonicity limiter.
+        for i in range(n - 1):
+            d = secants[i]
+            if d == 0.0:
+                slopes[i] = 0.0
+                slopes[i + 1] = 0.0
+                continue
+            a = slopes[i] / d
+            b = slopes[i + 1] / d
+            if a < 0.0:
+                slopes[i] = 0.0
+                a = 0.0
+            if b < 0.0:
+                slopes[i + 1] = 0.0
+                b = 0.0
+            mag = a * a + b * b
+            if mag > 9.0:
+                tau = 3.0 / math.sqrt(mag)
+                slopes[i] = tau * a * d
+                slopes[i + 1] = tau * b * d
+
+        points = []
+        for i in range(n - 1):
+            x0, y0 = x_vals[i], y_vals[i]
+            x1, y1 = x_vals[i + 1], y_vals[i + 1]
+            dx = x1 - x0
+            if dx <= 0:
+                continue
+
+            m0 = slopes[i]
+            m1 = slopes[i + 1]
+
+            step_count = max(4, int(samples_per_segment))
+            for s in range(step_count):
+                u = s / float(step_count)
+                h00 = (2 * u ** 3) - (3 * u ** 2) + 1
+                h10 = (u ** 3) - (2 * u ** 2) + u
+                h01 = (-2 * u ** 3) + (3 * u ** 2)
+                h11 = (u ** 3) - (u ** 2)
+
+                x = x0 + (dx * u)
+                y = h00 * y0 + h10 * m0 * dx + h01 * y1 + h11 * m1 * dx
+                points.append((x, y))
+
+        points.append(anchors[-1])
+        return points
+
     def generate_clouds(self):
-        """Generate world-anchored clouds that drift gently with wind."""
+        """Generate world-anchored clouds across the full map width."""
         self.clouds = []
-        cloud_y_choices = [55, 85, 120, 155, 190, 235]
-        cloud_count = 9
-        spacing = max(600, self.width // cloud_count)
+        cloud_clearance_choices = [180, 210, 240, 270, 300, 335, 370, 405]
+
+        # Scale cloud count with map width so long runs still show strong motion cues.
+        bucket_spacing = 950
+        cloud_count = max(35, int(self.width / bucket_spacing))
+        spacing = self.width / float(cloud_count)
+
         for i in range(cloud_count):
+            base_x = (i + 0.5) * spacing
             self.clouds.append({
-                "x": 120 + i * spacing + random.randint(-140, 140),
-                "y": random.choice(cloud_y_choices) + random.randint(-12, 18),
-                "s": random.randint(26, 44),
+                "x": base_x + random.uniform(-spacing * 0.42, spacing * 0.42),
+                # Fixed distance above local terrain for this cloud.
+                "terrain_gap": random.choice(cloud_clearance_choices) + random.randint(-18, 22),
+                "s": random.randint(24, 50),
                 "drift": random.uniform(0.15, 0.45),
             })
     
@@ -131,10 +213,11 @@ class Terrain:
         # Update cloud positions (slow wind drift, wrapped through world bounds).
         for c in self.clouds:
             c["x"] += self.wind_speed * c["drift"]
-            if c["x"] < -200:
-                c["x"] = self.width + 200
-            elif c["x"] > self.width + 200:
-                c["x"] = -200
+            wrap_margin = 280
+            if c["x"] < -wrap_margin:
+                c["x"] = self.width + wrap_margin
+            elif c["x"] > self.width + wrap_margin:
+                c["x"] = -wrap_margin
     
     def get_ground_y_at(self, x):
         """Get terrain height at a specific x coordinate (linear interpolation)."""

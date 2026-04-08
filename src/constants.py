@@ -25,6 +25,14 @@ DRAG_INDUCED_K = 0.18
 BOOST_THRUST_N = 65.0
 BOOST_FUEL_BURN_PER_SEC = 14.0
 
+# Ground material tuning
+ICE_FRICTION = 0.9992
+SNOW_FRICTION = 0.985
+DEFAULT_GROUND_FRICTION = 0.995
+FLAT_ICE_SLOPE_THRESHOLD = 0.12
+FLAT_ICE_FRICTION = 0.99985
+ZERO_FRICTION_SLOPE_THRESHOLD = 0.04
+
 # Game States
 STATE_MENU = "menu"
 STATE_PLAYING = "playing"
@@ -49,9 +57,9 @@ SLED_TIERS = {
 }
 
 GLIDER_TIERS = {
-    "kite": {"name": "Kite", "glide_mult": 1.20, "cost": 0},
-    "old_glider": {"name": "Old Glider", "glide_mult": 1.45, "cost": 500},
-    "hand_glider": {"name": "Hand Glider", "glide_mult": 1.75, "cost": 1300},
+    "kite": {"name": "Kite", "glide_mult": 1.20, "camber_deg": 2.0, "cost": 0},
+    "old_glider": {"name": "Old Glider", "glide_mult": 1.45, "camber_deg": 3.0, "cost": 500},
+    "hand_glider": {"name": "Hand Glider", "glide_mult": 1.75, "camber_deg": 4.0, "cost": 1300},
 }
 
 BOOSTER_TIERS = {
