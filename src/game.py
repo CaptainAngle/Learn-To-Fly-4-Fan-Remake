@@ -266,14 +266,15 @@ class Game:
             else:
                 friction = 0.995
 
+            # Sled detaches once the penguin leaves the launch ramp geometry.
+            if self.player.sled_attached and self.player.x > (self.environment.terrain.ice_end_x + 2):
+                self.player.sled_attached = False
+
             # Sled reduces ramp friction while attached and on ice.
             if grounded and surface_type == "ice" and self.player.sled_attached and self.player.sled in SLED_TIERS:
                 sled_mult = SLED_TIERS[self.player.sled]["ramp_friction_mult"]
                 friction = min(0.9995, friction * sled_mult)
 
-            # Sled is launched away once the penguin leaves the ramp.
-            if not grounded and self.player.sled_attached:
-                self.player.sled_attached = False
 
             self.player.update(
                 controls,

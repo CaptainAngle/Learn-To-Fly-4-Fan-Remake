@@ -52,12 +52,36 @@ class Player:
         
         dt = max(1e-4, dt)
         if grounded:
-            # Grounded ramp slide physics (pixel-domain), keeps penguin glued to slope.
+            # Grounded ramp slide physics with aero still active (horizontal only).
+            pitch = math.radians(self.angle)
+            vx_ms = self.vx * FPS / PIXELS_PER_METER
+            vy_up_ms = -self.vy * FPS / PIXELS_PER_METER
+            speed_ms = max(0.1, math.hypot(vx_ms, vy_up_ms))
+
+            vel_dir_x = vx_ms / speed_ms
+            vel_dir_y = vy_up_ms / speed_ms
+            flight_path_angle = math.atan2(vy_up_ms, vx_ms)
+
+            alpha = max(math.radians(-25), min(math.radians(25), pitch - flight_path_angle))
+            cl = LIFT_COEFF_0 + LIFT_COEFF_ALPHA * alpha
+            cl = max(LIFT_COEFF_MIN, min(LIFT_COEFF_MAX, cl))
+            cd = DRAG_COEFF_0 + DRAG_INDUCED_K * (cl ** 2)
+
+            wing_area = BASE_WING_AREA_M2 * (float(glider_stats["glide_mult"]) ** 1.35)
+            q = 0.5 * AIR_DENSITY * (speed_ms ** 2)
+            lift_n = q * wing_area * cl
+            drag_n = q * wing_area * cd
+
+            lift_dir_x = -vel_dir_y
+            drag_dir_x = -vel_dir_x
+            thrust_x = thrust_n * max(0.0, math.cos(pitch))
+
+            fx_ground = lift_n * lift_dir_x + drag_n * drag_dir_x + thrust_x
+            ax_ground = fx_ground / PLAYER_MASS_KG
+            self.vx += (ax_ground * dt) * PIXELS_PER_METER / FPS
+
+            # Gravity projected along the slope.
             self.vx += GRAVITY * terrain_slope * 1.5
-            # Small thrust contribution while on ground.
-            if thrust_n > 0:
-                thrust_px = (thrust_n / PLAYER_MASS_KG) * (PIXELS_PER_METER / FPS) * dt * FPS
-                self.vx += max(0.0, math.cos(math.radians(self.angle))) * thrust_px
             self.vx *= surface_friction
             self.vy = self.vx * terrain_slope
 
