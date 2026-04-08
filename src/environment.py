@@ -34,8 +34,8 @@ class Terrain:
             (360, start_y + 8 - extra_drop_px),      # Longer near-flat entry
             (760, start_y + 360),                     # Steeper and deeper downhill
             (980, start_y + 365),                     # Short center settle section
-            (1260, start_y + 170),                    # Recovery climb toward launch
-            (1320, start_y + 135),                    # Much shorter ~30 deg launch exit
+            (1120, start_y + 170),                    # Half-length recovery climb toward launch
+            (1135, start_y + 161),                    # Extra-short launch exit segment
         ]
 
         launch_points = self._build_smooth_ramp_points(launch_anchors, samples_per_segment=24)

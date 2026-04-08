@@ -392,9 +392,9 @@ class Game:
                 sled_mult = SLED_TIERS[self.player.sled]["ramp_friction_mult"]
                 friction = min(0.9995, friction * sled_mult)
 
-            # Ramp friction tuning: divide effective drag loss by ~7 on ramp ice.
+            # Ramp friction tuning: heavily reduce effective drag loss on ramp ice.
             if grounded and surface_type == "ice":
-                friction = 1.0 - ((1.0 - friction) / 7.0)
+                friction = 1.0 - ((1.0 - friction) / RAMP_FRICTION_LOSS_DIVISOR)
 
 
             self.player.update(
