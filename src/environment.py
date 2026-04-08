@@ -20,42 +20,44 @@ class Terrain:
         """Generate terrain with start ramp, long air section, then flat ground."""
         self.points = []
         self.ramps = []
-        start_y = self.height - 380
-        snow_y = self.height - 90
+        start_y = self.height - 520
 
         # Launch section only at the beginning.
+        # Profile: almost-flat top -> steep down -> short flat -> ~30deg launch up -> cliff.
         launch_points = [
             (0, start_y),
-            (120, start_y + 8),
-            (250, start_y + 45),
-            (390, start_y + 95),
-            (520, start_y + 145),
-            # Launch lip (upward kick)
-            (610, start_y + 105),
-            (690, start_y + 72),
-            (740, start_y + 95),
-            (820, start_y + 145),
+            (170, start_y + 6),
+            (350, start_y + 170),
+            (430, start_y + 175),
+            (560, start_y + 100),
+            (620, start_y + 70),
         ]
 
-        # Keep the whole ramp assembly above snow.
-        launch_points = [(x, min(y, snow_y - 70)) for x, y in launch_points]
+        lowest_ramp_y = max(y for _, y in launch_points)
+        launch_off_y = launch_points[-1][1]  # launch lip height
+
+        # Make snow start much lower than launch-off (approx 10m drop).
+        snow_drop_from_launch_m = 10
+        snow_y = launch_off_y + (snow_drop_from_launch_m * PIXELS_PER_METER)
+        # Keep snow safely below the whole ramp assembly as well.
+        snow_y = max(snow_y, lowest_ramp_y + (4 * PIXELS_PER_METER))
         self.points.extend(launch_points)
 
-        # Air section: terrain goes below screen so player is airborne.
-        air_start_x = 900
-        air_end_x = 2600
-        self.points.append((air_start_x, self.height + 220))
-        self.points.append((air_end_x, self.height + 220))
+        # Tiny snow shelf right after the launch lip, then a near-vertical drop to snow.
+        shelf_end_x = 632
+        shelf_y = launch_off_y + 6
+        self.points.append((shelf_end_x, shelf_y))
 
-        # Flat ground only after the air gap.
+        # Snow starts immediately after the drop (no horizontal air gap).
+        snow_step_x = shelf_end_x + 2
         flat_y = snow_y
-        self.points.append((air_end_x + 200, flat_y))
+        self.points.append((snow_step_x, flat_y))
         self.points.append((self.width, flat_y))
 
         # Surface zones for physics + rendering.
-        self.ice_end_x = air_start_x
-        self.air_end_x = air_end_x
-        self.snow_start_x = air_end_x + 200
+        self.ice_end_x = 620
+        self.shelf_snow_end_x = shelf_end_x
+        self.snow_start_x = snow_step_x
 
         # Record steep segments as ramps.
         for i in range(len(self.points) - 1):
@@ -83,11 +85,9 @@ class Terrain:
         return 0
 
     def get_surface_type_at(self, x):
-        """Return surface type at x: ice, air, or snow."""
+        """Return surface type at x: ice or snow."""
         if x <= self.ice_end_x:
             return "ice"
-        if x < self.snow_start_x:
-            return "air"
         return "snow"
     
     def update(self):

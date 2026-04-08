@@ -44,7 +44,7 @@ class UIManager:
         """Draw in-game stats."""
         wind_direction = "→" if environment.terrain.wind_speed > 0 else "←" if environment.terrain.wind_speed < 0 else "·"
         stats_text = [
-            f"Distance: {int(player.distance_traveled)}",
+            f"Distance: {int(player.distance_traveled)} m",
             f"Fuel: {int(player.fuel)}/{int(player.max_fuel)}",
             f"Gear: {player.current_gear}",
             f"Coins: {player.coins}",
@@ -84,7 +84,7 @@ class UIManager:
         pygame.draw.rect(surface, (255, 255, 255), (bar_x, bar_y, bar_width, bar_height), 2)
         
         # Draw text
-        progress_text = f"{int(player.distance_traveled)}/{mission.target_value}"
+        progress_text = f"{int(player.distance_traveled)}/{mission.target_value} m"
         text_surf = self.font_small.render(progress_text, True, (255, 255, 255))
         text_rect = text_surf.get_rect(center=(SCREEN_WIDTH // 2, bar_y + bar_height // 2))
         surface.blit(text_surf, text_rect)
@@ -159,7 +159,7 @@ class UIManager:
         surface.blit(title, title_rect)
         
         result_text = [
-            f"Distance: {int(distance)} units",
+            f"Distance: {int(distance)} m",
             f"Coins Earned: +{coins_earned}",
         ]
         

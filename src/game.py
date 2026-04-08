@@ -249,7 +249,7 @@ class Game:
                         self.flight_coins_earned = self.mission_manager.current_mission.reward_coins
                         self.mission_completed_this_flight = True
 
-                base_coins = int(self.flight_distance / 100)
+                base_coins = int(self.flight_distance / 10)
                 self.flight_coins_earned += base_coins
                 self.player.coins += self.flight_coins_earned
                 self.game_data["total_coins"] += self.flight_coins_earned
@@ -275,7 +275,7 @@ class Game:
                         self.flight_coins_earned = self.mission_manager.current_mission.reward_coins
                         self.mission_completed_this_flight = True
                 
-                base_coins = int(self.flight_distance / 100)
+                base_coins = int(self.flight_distance / 10)
                 self.flight_coins_earned += base_coins
                 self.player.coins += self.flight_coins_earned
                 self.game_data["total_coins"] += self.flight_coins_earned
@@ -450,36 +450,10 @@ class Game:
             pygame.draw.ellipse(sprite, (255, 165, 0), (size * 1.2, size * 2.1, size * 0.45, size * 0.18))
             pygame.draw.ellipse(sprite, (255, 165, 0), (size * 1.7, size * 2.12, size * 0.45, size * 0.18))
 
-            # Gear overlays so equipped gear is visible on the penguin.
-            gear = self.player.current_gear
-            if gear == "jetpack_mk1":
-                pygame.draw.rect(sprite, (120, 120, 130), (size * 0.95, size * 1.0, size * 0.55, size * 0.95), border_radius=3)
-                pygame.draw.rect(sprite, (230, 90, 30), (size * 0.88, size * 1.88, size * 0.18, size * 0.28))
-                pygame.draw.rect(sprite, (230, 90, 30), (size * 1.42, size * 1.88, size * 0.18, size * 0.28))
-            elif gear == "wingsuit":
-                pygame.draw.polygon(sprite, (80, 110, 150), [
-                    (size * 1.45, size * 1.3),
-                    (size * 0.65, size * 1.6),
-                    (size * 1.0, size * 1.95),
-                ])
-                pygame.draw.polygon(sprite, (80, 110, 150), [
-                    (size * 1.95, size * 1.3),
-                    (size * 2.75, size * 1.55),
-                    (size * 2.35, size * 1.95),
-                ])
-            elif gear == "rocket_boots":
-                pygame.draw.rect(sprite, (190, 70, 70), (size * 1.18, size * 2.12, size * 0.42, size * 0.22), border_radius=2)
-                pygame.draw.rect(sprite, (190, 70, 70), (size * 1.66, size * 2.12, size * 0.42, size * 0.22), border_radius=2)
-                pygame.draw.circle(sprite, (255, 190, 60), (int(size * 1.18), int(size * 2.22)), int(size * 0.06))
-                pygame.draw.circle(sprite, (255, 190, 60), (int(size * 2.08), int(size * 2.22)), int(size * 0.06))
-            elif gear == "propeller_hat":
-                pygame.draw.ellipse(sprite, (90, 90, 95), (size * 2.15, size * 0.35, size * 0.55, size * 0.22))
-                pygame.draw.line(sprite, (120, 120, 120), (size * 2.42, size * 0.35), (size * 2.42, size * 0.05), 2)
-                pygame.draw.line(sprite, (170, 170, 175), (size * 2.05, size * 0.05), (size * 2.78, size * 0.05), 3)
-
             rotated = pygame.transform.rotozoom(sprite, self.player.angle, 1.0)
             rect = rotated.get_rect(center=(player_screen_x, player_screen_y))
             surface.blit(rotated, rect)
+            self.draw_equipment_overlay(surface, player_screen_x, player_screen_y, size, self.player.current_gear, self.player.angle)
             
             # Fuel bar
             if self.player.fuel > 0:
@@ -496,6 +470,54 @@ class Game:
                 pygame.draw.rect(surface, fuel_color, (bar_x, bar_y, fuel_width, bar_height))
                 
                 pygame.draw.rect(surface, (200, 200, 200), (bar_x, bar_y, bar_width, bar_height), 1)
+
+    def draw_equipment_overlay(self, surface, px, py, size, gear, angle):
+        """Draw oversized equipment overlay attached to penguin."""
+        if gear == "base":
+            return
+
+        # Halved from previous value and re-centered around penguin body.
+        gear_scale = 3.5
+        canvas = pygame.Surface((size * 24, size * 24), pygame.SRCALPHA)
+        cx = size * 12
+        cy = size * 12
+
+        if gear == "jetpack_mk1":
+            pygame.draw.rect(
+                canvas,
+                (120, 120, 130),
+                (cx - size * 0.95 * gear_scale, cy - size * 0.1 * gear_scale, size * 0.45 * gear_scale, size * 0.8 * gear_scale),
+                border_radius=6,
+            )
+            pygame.draw.rect(canvas, (230, 90, 30), (cx - size * 1.0 * gear_scale, cy + size * 0.55 * gear_scale, size * 0.16 * gear_scale, size * 0.22 * gear_scale))
+            pygame.draw.rect(canvas, (230, 90, 30), (cx - size * 0.62 * gear_scale, cy + size * 0.55 * gear_scale, size * 0.16 * gear_scale, size * 0.22 * gear_scale))
+
+        elif gear == "wingsuit":
+            pygame.draw.polygon(canvas, (80, 110, 150), [
+                (cx - size * 0.08 * gear_scale, cy),
+                (cx - size * 1.0 * gear_scale, cy + size * 0.4 * gear_scale),
+                (cx - size * 0.35 * gear_scale, cy + size * 0.78 * gear_scale),
+            ])
+            pygame.draw.polygon(canvas, (80, 110, 150), [
+                (cx + size * 0.08 * gear_scale, cy),
+                (cx + size * 1.0 * gear_scale, cy + size * 0.4 * gear_scale),
+                (cx + size * 0.35 * gear_scale, cy + size * 0.78 * gear_scale),
+            ])
+
+        elif gear == "rocket_boots":
+            pygame.draw.rect(canvas, (190, 70, 70), (cx - size * 0.48 * gear_scale, cy + size * 0.72 * gear_scale, size * 0.32 * gear_scale, size * 0.16 * gear_scale), border_radius=5)
+            pygame.draw.rect(canvas, (190, 70, 70), (cx + size * 0.02 * gear_scale, cy + size * 0.72 * gear_scale, size * 0.32 * gear_scale, size * 0.16 * gear_scale), border_radius=5)
+            pygame.draw.circle(canvas, (255, 190, 60), (int(cx - size * 0.52 * gear_scale), int(cy + size * 0.81 * gear_scale)), int(size * 0.05 * gear_scale))
+            pygame.draw.circle(canvas, (255, 190, 60), (int(cx + size * 0.38 * gear_scale), int(cy + size * 0.81 * gear_scale)), int(size * 0.05 * gear_scale))
+
+        elif gear == "propeller_hat":
+            pygame.draw.ellipse(canvas, (90, 90, 95), (cx - size * 0.22 * gear_scale, cy - size * 0.92 * gear_scale, size * 0.44 * gear_scale, size * 0.18 * gear_scale))
+            pygame.draw.line(canvas, (120, 120, 120), (cx, cy - size * 0.92 * gear_scale), (cx, cy - size * 1.18 * gear_scale), 3)
+            pygame.draw.line(canvas, (170, 170, 175), (cx - size * 0.38 * gear_scale, cy - size * 1.18 * gear_scale), (cx + size * 0.38 * gear_scale, cy - size * 1.18 * gear_scale), 4)
+
+        rotated_overlay = pygame.transform.rotozoom(canvas, angle, 1.0)
+        overlay_rect = rotated_overlay.get_rect(center=(px, py))
+        surface.blit(rotated_overlay, overlay_rect)
 
 
 if __name__ == "__main__":

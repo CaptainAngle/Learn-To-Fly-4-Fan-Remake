@@ -9,7 +9,7 @@ class Player:
         self.y = y
         self.vx = 0  # velocity x
         self.vy = 0  # velocity y
-        self.size = 15
+        self.size = 13
         self.angle = 0  # rotation angle
         
         # Flight stats
@@ -74,7 +74,7 @@ class Player:
         
         # Track distance (horizontal only)
         if self.vx > 0:
-            self.distance_traveled += self.vx
+            self.distance_traveled += self.vx / PIXELS_PER_METER
     
     def check_landing(self, terrain_y):
         """Check if player lands on ground."""

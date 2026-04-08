@@ -32,11 +32,11 @@ class MissionManager:
     def create_default_missions(self):
         """Create default missions."""
         missions = [
-            Mission(1, "First Flight", "Fly 500 units", "distance", 500, 100),
-            Mission(2, "Getting Distance", "Fly 1000 units", "distance", 1000, 250),
-            Mission(3, "Long Haul", "Fly 2500 units", "distance", 2500, 500),
-            Mission(4, "Marathon Flight", "Fly 5000 units", "distance", 5000, 1000),
-            Mission(5, "Elite Flyer", "Fly 10000 units", "distance", 10000, 2000),
+            Mission(1, "First Flight", "Fly 25 m", "distance", 25, 100),
+            Mission(2, "Getting Distance", "Fly 50 m", "distance", 50, 250),
+            Mission(3, "Long Haul", "Fly 125 m", "distance", 125, 500),
+            Mission(4, "Marathon Flight", "Fly 250 m", "distance", 250, 1000),
+            Mission(5, "Elite Flyer", "Fly 500 m", "distance", 500, 2000),
         ]
         self.missions = missions
     
