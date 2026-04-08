@@ -31,6 +31,7 @@ class Game:
         
         # Camera system for scrolling
         self.camera_x = 0  # Camera position for horizontal scrolling
+        self.camera_y = 0  # Camera position for vertical scrolling
         
         # Load or create save
         self.load_or_create_save()
@@ -43,6 +44,7 @@ class Game:
         self.flight_distance = 0
         self.flight_coins_earned = 0
         self.mission_completed_this_flight = False
+        self.low_speed_frames = 0
     
     def load_or_create_save(self):
         """Load existing save or create new one."""
@@ -104,12 +106,19 @@ class Game:
     
     def start_flight(self):
         """Initialize a new flight."""
-        self.player = Player(100, 200)
-        self.player.coins = self.game_data.get("total_coins", 0)
         self.environment = Environment()
+        spawn_x = 80
+        spawn_y = self.environment.terrain.get_ground_y_at(spawn_x) - 18
+        self.player = Player(spawn_x, spawn_y)
+        self.player.coins = self.game_data.get("total_coins", 0)
+        self.player.vx = 1.0
+        self.player.angle = 0
+        self.camera_x = 0
+        self.camera_y = 0
         self.flight_distance = 0
         self.flight_coins_earned = 0
         self.mission_completed_this_flight = False
+        self.low_speed_frames = 0
         
         # Equip the current gear
         if "equipped_gear" in self.game_data:
@@ -136,9 +145,9 @@ class Game:
         if self.state == STATE_PLAYING:
             keys = pygame.key.get_pressed()
             controls = {
-                "up": keys[pygame.K_SPACE] or keys[pygame.K_UP] or keys[pygame.K_w],
                 "left": keys[pygame.K_LEFT] or keys[pygame.K_a],
                 "right": keys[pygame.K_RIGHT] or keys[pygame.K_d],
+                "boost": keys[pygame.K_SPACE] or keys[pygame.K_UP] or keys[pygame.K_w],
             }
             return controls
         return {}
@@ -200,54 +209,66 @@ class Game:
     def update(self, controls):
         """Update game state."""
         if self.state == STATE_PLAYING:
-            self.player.update(controls, self.environment.terrain.wind_speed)
-            self.environment.update()
-            
-            # Apply ramp boost when player is on a slope
             terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
-            self.environment.terrain.apply_ramp_boost(self.player, terrain_y)
-            
-            # Update camera to follow player (keep penguin mostly centered)
-            self.camera_x = max(0, min(self.player.x - SCREEN_WIDTH // 3, 
-                                       self.environment.terrain.width - SCREEN_WIDTH))
-            
-            # Check landing
-            if self.player.check_landing(terrain_y):
-                # Flight ended
+            slope = self.environment.terrain.apply_ramp_boost(self.player, terrain_y)
+            surface_type = self.environment.terrain.get_surface_type_at(self.player.x)
+
+            # Ground contact: slide on ramp when touching terrain, otherwise airborne.
+            grounded = self.player.y + self.player.size >= terrain_y - 2 and self.player.vy >= -1.5
+            if grounded:
+                self.player.y = terrain_y - self.player.size
+
+            # Material friction: ice is slippery, snow is much stickier.
+            if surface_type == "ice":
+                friction = 0.998
+            elif surface_type == "snow":
+                friction = 0.92
+            else:
+                friction = 0.995
+
+            self.player.update(
+                controls,
+                terrain_slope=slope,
+                boosting=controls.get("boost", False),
+                grounded=grounded,
+                surface_friction=friction,
+            )
+            self.environment.update()
+
+            # End the day if the penguin has effectively stopped.
+            speed = (self.player.vx ** 2 + self.player.vy ** 2) ** 0.5
+            if grounded and speed < 0.2:
+                self.low_speed_frames += 1
+            else:
+                self.low_speed_frames = 0
+
+            if self.low_speed_frames >= 30:
                 self.flight_distance = self.player.distance_traveled
-                
-                # Check if mission completed
                 if self.mission_manager.current_mission:
                     if self.mission_manager.current_mission.check_completion(self.flight_distance):
                         self.flight_coins_earned = self.mission_manager.current_mission.reward_coins
                         self.mission_completed_this_flight = True
-                
-                # Award coins
+
                 base_coins = int(self.flight_distance / 100)
                 self.flight_coins_earned += base_coins
                 self.player.coins += self.flight_coins_earned
                 self.game_data["total_coins"] += self.flight_coins_earned
                 self.game_data["total_distance"] += self.flight_distance
-                
-                # Save and show results
                 self.save_game()
                 self.state = STATE_RESULTS
-            
-            # Check hazard collision
-            if self.environment.check_hazard_collision(self.player):
-                # Crash - end flight
-                self.flight_distance = self.player.distance_traveled
-                self.flight_coins_earned = max(0, int(self.flight_distance / 200))  # Reduced coins on crash
-                self.player.coins += self.flight_coins_earned
-                self.game_data["total_coins"] += self.flight_coins_earned
-                self.save_game()
-                self.state = STATE_RESULTS
-            
-            # Check screen bounds
+                return
+
+            # Keep penguin mostly stationary on screen while map scrolls.
+            target_x = self.player.x - 120
+            self.camera_x = max(0, min(target_x, self.environment.terrain.width - SCREEN_WIDTH))
+            target_y = self.player.y - SCREEN_HEIGHT * 0.45
+            self.camera_y += (target_y - self.camera_y) * 0.15
+
+            # World bounds
             if self.player.x < 0:
                 self.player.x = 0
-            elif self.player.x > SCREEN_WIDTH:
-                # Went off screen - success!
+                self.player.vx = 0
+            elif self.player.x > self.environment.terrain.width - 50:
                 self.flight_distance = self.player.distance_traveled
                 if self.mission_manager.current_mission:
                     if self.mission_manager.current_mission.check_completion(self.flight_distance):
@@ -296,9 +317,11 @@ class Game:
             # Draw clouds
             for i in range(5):
                 cloud_y = 50 + (i * 100)
-                pygame.draw.circle(self.screen, (255, 255, 255), (int(100 + i * 200 - self.camera_x * 0.3), cloud_y), 30)
-                pygame.draw.circle(self.screen, (255, 255, 255), (int(130 + i * 200 - self.camera_x * 0.3), cloud_y), 35)
-                pygame.draw.circle(self.screen, (255, 255, 255), (int(70 + i * 200 - self.camera_x * 0.3), cloud_y), 25)
+                parallax_x = int(100 + i * 200 - self.camera_x * 0.3)
+                parallax_y = int(cloud_y - self.camera_y * 0.2)
+                pygame.draw.circle(self.screen, (255, 255, 255), (parallax_x, parallax_y), 30)
+                pygame.draw.circle(self.screen, (255, 255, 255), (parallax_x + 30, parallax_y), 35)
+                pygame.draw.circle(self.screen, (255, 255, 255), (parallax_x - 30, parallax_y), 25)
             
             # Draw game elements with camera offset applied
             self.draw_terrain_with_camera(self.screen)
@@ -328,6 +351,151 @@ class Game:
             self.clock.tick(FPS)
         
         pygame.quit()
+    
+    def draw_terrain_with_camera(self, surface):
+        """Draw terrain with camera offset applied."""
+        terrain = self.environment.terrain
+        offset = self.camera_x
+        offset_y = self.camera_y
+        
+        # Draw terrain base polygon (snow shadow)
+        if len(terrain.points) > 1:
+            terrain_points = [(x - offset, y - offset_y) for x, y in terrain.points]
+            terrain_points.append((self.environment.terrain.width - offset, SCREEN_HEIGHT * 2))
+            terrain_points.append((0 - offset, SCREEN_HEIGHT * 2))
+            
+            pygame.draw.polygon(surface, (210, 220, 235), terrain_points)
+
+        # Draw top surface by material.
+        for i in range(len(terrain.points) - 1):
+            x1, y1 = terrain.points[i]
+            x2, y2 = terrain.points[i + 1]
+            mid_x = (x1 + x2) * 0.5
+            mat = terrain.get_surface_type_at(mid_x)
+            if mat == "ice":
+                top_color = (160, 220, 255)
+                edge_color = (220, 245, 255)
+                width = 6
+            elif mat == "snow":
+                top_color = (245, 248, 255)
+                edge_color = (255, 255, 255)
+                width = 8
+            else:
+                continue
+
+            pygame.draw.line(surface, top_color, (x1 - offset, y1 - offset_y), (x2 - offset, y2 - offset_y), width)
+            pygame.draw.line(surface, edge_color, (x1 - offset, y1 - offset_y), (x2 - offset, y2 - offset_y), 2)
+        
+        # Draw terrain outline
+        for i in range(len(terrain.points) - 1):
+            x1, y1 = terrain.points[i]
+            x2, y2 = terrain.points[i + 1]
+            pygame.draw.line(surface, (150, 165, 185), (x1 - offset, y1 - offset_y), (x2 - offset, y2 - offset_y), 2)
+        
+        # Subtle ice sheen on launch ramp.
+        for i in range(len(terrain.points) - 1):
+            x1, y1 = terrain.points[i]
+            x2, y2 = terrain.points[i + 1]
+            mid_x = (x1 + x2) * 0.5
+            if terrain.get_surface_type_at(mid_x) == "ice":
+                pygame.draw.line(surface, (190, 235, 255), (x1 - offset, y1 - offset_y - 4), (x2 - offset, y2 - offset_y - 4), 1)
+        
+        # Draw wind particles
+        for p in terrain.wind_particles:
+            if -50 < p["x"] - offset < SCREEN_WIDTH + 50:
+                size = max(1, int(2 * (p["life"] / 30)))
+                pygame.draw.circle(surface, (180, 180, 180), (int(p["x"] - offset), int(p["y"] - offset_y)), size)
+        
+        # Draw hazards with camera offset
+        for hazard in self.environment.hazards:
+            hazard_screen_x = hazard.x - offset
+            hazard_screen_y = hazard.y - offset_y
+            if -50 < hazard_screen_x < SCREEN_WIDTH + 50:  # Only draw if visible
+                if hazard.type == "spike":
+                    pygame.draw.polygon(surface, (255, 0, 0), [
+                        (hazard_screen_x, hazard_screen_y - hazard.size),
+                        (hazard_screen_x - hazard.size, hazard_screen_y + hazard.size),
+                        (hazard_screen_x + hazard.size, hazard_screen_y + hazard.size),
+                    ])
+                elif hazard.type == "wall":
+                    pygame.draw.rect(surface, (128, 128, 128), 
+                                   (hazard_screen_x - hazard.size, hazard_screen_y - hazard.size * 2, 
+                                    hazard.size * 2, hazard.size * 4))
+    
+    def draw_player_with_camera(self, surface):
+        """Draw player with camera offset applied."""
+        offset = self.camera_x
+        offset_y = self.camera_y
+        size = self.player.size
+        player_screen_x = self.player.x - offset
+        player_screen_y = self.player.y - offset_y
+
+        if -size * 2 < player_screen_x < SCREEN_WIDTH + size * 2:
+            sprite = pygame.Surface((size * 4, size * 3), pygame.SRCALPHA)
+            cx = int(size * 2)
+            cy = int(size * 1.5)
+
+            # Side-profile penguin facing right.
+            pygame.draw.ellipse(sprite, (20, 20, 20), (size * 0.8, size * 0.7, size * 2.1, size * 1.6))
+            pygame.draw.ellipse(sprite, (230, 230, 230), (size * 1.35, size * 1.0, size * 1.15, size * 1.15))
+            pygame.draw.circle(sprite, (20, 20, 20), (int(size * 2.45), int(size * 0.9)), int(size * 0.45))
+            pygame.draw.circle(sprite, (255, 255, 255), (int(size * 2.55), int(size * 0.85)), int(size * 0.13))
+            pygame.draw.circle(sprite, (0, 0, 0), (int(size * 2.6), int(size * 0.85)), int(size * 0.06))
+            pygame.draw.polygon(sprite, (255, 160, 0), [
+                (size * 2.8, size * 0.95),
+                (size * 3.25, size * 1.05),
+                (size * 2.82, size * 1.18),
+            ])
+            pygame.draw.ellipse(sprite, (15, 15, 15), (size * 1.3, size * 1.1, size * 0.85, size * 0.6))
+            pygame.draw.ellipse(sprite, (255, 165, 0), (size * 1.2, size * 2.1, size * 0.45, size * 0.18))
+            pygame.draw.ellipse(sprite, (255, 165, 0), (size * 1.7, size * 2.12, size * 0.45, size * 0.18))
+
+            # Gear overlays so equipped gear is visible on the penguin.
+            gear = self.player.current_gear
+            if gear == "jetpack_mk1":
+                pygame.draw.rect(sprite, (120, 120, 130), (size * 0.95, size * 1.0, size * 0.55, size * 0.95), border_radius=3)
+                pygame.draw.rect(sprite, (230, 90, 30), (size * 0.88, size * 1.88, size * 0.18, size * 0.28))
+                pygame.draw.rect(sprite, (230, 90, 30), (size * 1.42, size * 1.88, size * 0.18, size * 0.28))
+            elif gear == "wingsuit":
+                pygame.draw.polygon(sprite, (80, 110, 150), [
+                    (size * 1.45, size * 1.3),
+                    (size * 0.65, size * 1.6),
+                    (size * 1.0, size * 1.95),
+                ])
+                pygame.draw.polygon(sprite, (80, 110, 150), [
+                    (size * 1.95, size * 1.3),
+                    (size * 2.75, size * 1.55),
+                    (size * 2.35, size * 1.95),
+                ])
+            elif gear == "rocket_boots":
+                pygame.draw.rect(sprite, (190, 70, 70), (size * 1.18, size * 2.12, size * 0.42, size * 0.22), border_radius=2)
+                pygame.draw.rect(sprite, (190, 70, 70), (size * 1.66, size * 2.12, size * 0.42, size * 0.22), border_radius=2)
+                pygame.draw.circle(sprite, (255, 190, 60), (int(size * 1.18), int(size * 2.22)), int(size * 0.06))
+                pygame.draw.circle(sprite, (255, 190, 60), (int(size * 2.08), int(size * 2.22)), int(size * 0.06))
+            elif gear == "propeller_hat":
+                pygame.draw.ellipse(sprite, (90, 90, 95), (size * 2.15, size * 0.35, size * 0.55, size * 0.22))
+                pygame.draw.line(sprite, (120, 120, 120), (size * 2.42, size * 0.35), (size * 2.42, size * 0.05), 2)
+                pygame.draw.line(sprite, (170, 170, 175), (size * 2.05, size * 0.05), (size * 2.78, size * 0.05), 3)
+
+            rotated = pygame.transform.rotozoom(sprite, self.player.angle, 1.0)
+            rect = rotated.get_rect(center=(player_screen_x, player_screen_y))
+            surface.blit(rotated, rect)
+            
+            # Fuel bar
+            if self.player.fuel > 0:
+                bar_width = 25
+                bar_height = 5
+                bar_x = player_screen_x - bar_width // 2
+                bar_y = player_screen_y - size - 15
+                
+                pygame.draw.rect(surface, (100, 100, 100), (bar_x, bar_y, bar_width, bar_height))
+                
+                fuel_width = int(bar_width * (self.player.fuel / self.player.max_fuel))
+                fuel_color = (int(255 * (1 - self.player.fuel / self.player.max_fuel)), 
+                            int(255 * (self.player.fuel / self.player.max_fuel)), 0)
+                pygame.draw.rect(surface, fuel_color, (bar_x, bar_y, fuel_width, bar_height))
+                
+                pygame.draw.rect(surface, (200, 200, 200), (bar_x, bar_y, bar_width, bar_height), 1)
 
 
 if __name__ == "__main__":

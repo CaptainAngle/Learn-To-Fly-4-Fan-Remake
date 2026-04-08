@@ -21,7 +21,7 @@ class Player:
         self.is_flying = True
         self.is_landed = False
         
-    def update(self, controls, wind_speed):
+    def update(self, controls, terrain_slope=0.0, boosting=False, grounded=False, surface_friction=0.995):
         """Update player position and physics."""
         if self.is_landed:
             return
@@ -29,32 +29,36 @@ class Player:
         # Get gear stats
         gear = GEAR_TYPES[self.current_gear]
         
-        # Apply wind effect
-        wind_force = wind_speed * 0.1
+        # Handle boost (thrust in facing direction)
+        if boosting and self.fuel > 0:
+            boost_force = BOOST_FORCE * gear["acceleration"]
+            rad = math.radians(self.angle)
+            self.vx += math.cos(rad) * boost_force
+            self.vy -= math.sin(rad) * boost_force
+            self.fuel = max(0, self.fuel - 1.0)
         
-        # Handle input
-        if controls.get("up") and self.fuel > 0:
-            thrust = 0.3 * gear["acceleration"]
-            self.vy -= thrust
-            self.fuel = max(0, self.fuel - 0.5)
-        
+        # Handle rotation
         if controls.get("left"):
-            self.vx -= 0.2 * gear["acceleration"]
-            self.angle = min(self.angle + 3, 45)
+            self.angle = min(self.angle + ROTATION_SPEED, 45)
+        elif controls.get("right"):
+            self.angle = max(self.angle - ROTATION_SPEED, -45)
+        else:
+            # Smooth return to neutral
+            self.angle *= 0.95
         
-        if controls.get("right"):
-            self.vx += 0.2 * gear["acceleration"]
-            self.angle = max(self.angle - 3, -45)
-        
-        if not controls.get("left") and not controls.get("right"):
-            self.angle *= 0.9  # Smooth return to center
-        
-        # Apply gravity and glide
-        gravity_effect = GRAVITY * (1.0 / gear["glide"])
-        self.vy += gravity_effect
-        
-        # Apply wind
-        self.vx += wind_force
+        if grounded:
+            # Slide along the terrain tangent.
+            self.vx += GRAVITY * terrain_slope * 2.2
+            self.vx *= surface_friction
+            self.vy = self.vx * terrain_slope
+            
+            # Kicker: convert speed into upward launch near sharp upturns.
+            if terrain_slope < -0.45 and self.vx > 5.0:
+                self.vy -= min(6.0, abs(terrain_slope) * self.vx * 0.22)
+        else:
+            # Airborne physics.
+            gravity_effect = GRAVITY / gear["glide"]
+            self.vy += gravity_effect
         
         # Cap velocity
         speed = math.sqrt(self.vx**2 + self.vy**2)
