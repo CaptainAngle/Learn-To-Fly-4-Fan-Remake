@@ -56,43 +56,61 @@ class Player:
             self.has_been_airborne = True
 
         if grounded:
-            # Reworked ramp model: motion is constrained to ramp tangent.
+            # Grounded ramp slide physics with aero still active (horizontal only).
             pitch = math.radians(self.angle)
-
-            # Tangent in screen coordinates (x right, y down).
-            norm = math.sqrt(1.0 + terrain_slope * terrain_slope)
-            tx = 1.0 / norm
-            ty = terrain_slope / norm
-
-            # Convert velocity to m/s in screen coordinates.
             vx_ms = self.vx * FPS / PIXELS_PER_METER
-            vy_ms = self.vy * FPS / PIXELS_PER_METER
+            vy_up_ms = -self.vy * FPS / PIXELS_PER_METER
+            speed_ms = max(0.1, math.hypot(vx_ms, vy_up_ms))
 
-            # Scalar speed along tangent (positive means forward/right along ramp).
-            vt_ms = vx_ms * tx + vy_ms * ty
+            vel_dir_x = vx_ms / speed_ms
+            vel_dir_y = vy_up_ms / speed_ms
+            flight_path_angle = math.atan2(vy_up_ms, vx_ms)
 
-            # Gravity projected onto slope tangent.
-            a_gravity_t = GRAVITY_MPS2 * ty
+            # Cambered wing bias: powered gliders can produce lift near zero pitch.
+            camber_bias = math.radians(float(glider_stats.get("camber_deg", 0.0)))
+            if thrust_n > 0.0 and self.glider in GLIDER_TIERS:
+                camber_bias += math.radians(1.0)
+            alpha = max(math.radians(-25), min(math.radians(25), pitch - flight_path_angle + camber_bias))
+            cl = LIFT_COEFF_0 + LIFT_COEFF_ALPHA * alpha
+            cl = max(LIFT_COEFF_MIN, min(LIFT_COEFF_MAX, cl))
+            cd = DRAG_COEFF_0 + DRAG_INDUCED_K * (cl ** 2)
 
-            # Thrust projected onto tangent (convert pitch y to screen space).
-            thrust_x = thrust_n * math.cos(pitch)
-            thrust_y_screen = -thrust_n * math.sin(pitch)
-            a_thrust_t = (thrust_x * tx + thrust_y_screen * ty) / PLAYER_MASS_KG
+            wing_area = BASE_WING_AREA_M2 * (float(glider_stats["glide_mult"]) ** 1.35)
+            q = 0.5 * AIR_DENSITY * (speed_ms ** 2)
+            lift_n = q * wing_area * cl
+            drag_n = q * wing_area * cd
 
-            vt_ms += (a_gravity_t + a_thrust_t) * dt
+            lift_dir_x = -vel_dir_y
+            lift_dir_y = vel_dir_x
+            drag_dir_x = -vel_dir_x
+            drag_dir_y = -vel_dir_y
+            thrust_x = thrust_n * max(0.0, math.cos(pitch))
+            thrust_y = thrust_n * math.sin(pitch)
 
-            # surface_friction is tuned as per-frame retention at FPS.
-            frame_scale = dt * FPS
-            vt_ms *= surface_friction ** frame_scale
+            ground_aero_enabled = self.has_been_airborne
+            fx_ground = 0.0
+            fy_ground = 0.0
+            if ground_aero_enabled:
+                fx_ground = lift_n * lift_dir_x + drag_n * drag_dir_x + thrust_x
+                fy_ground = lift_n * lift_dir_y + drag_n * drag_dir_y + thrust_y - PLAYER_MASS_KG * GRAVITY_MPS2
 
-            # Ramp should not pull the penguin backward in normal play feel.
-            if vt_ms < 0.0:
-                vt_ms = 0.0
+            ax_ground = fx_ground / PLAYER_MASS_KG
+            self.vx += (ax_ground * dt) * PIXELS_PER_METER / FPS
 
-            vx_ms = tx * vt_ms
-            vy_ms = ty * vt_ms
-            self.vx = vx_ms * PIXELS_PER_METER / FPS
-            self.vy = vy_ms * PIXELS_PER_METER / FPS
+            # Allow re-launch: if aero + thrust overcome weight, push upward off the ground.
+            if fy_ground > 0:
+                ay_up = fy_ground / PLAYER_MASS_KG
+                self.vy += (-ay_up * dt) * PIXELS_PER_METER / FPS
+
+            # Gravity projected along the slope.
+            self.vx += GRAVITY * terrain_slope * 1.5
+            self.vx *= surface_friction
+            if fy_ground <= 0:
+                self.vy = self.vx * terrain_slope
+
+            # Launch assist at sharp ramp upturns.
+            if terrain_slope < -0.45 and self.vx > 5.0:
+                self.vy -= min(4.5, abs(terrain_slope) * self.vx * 0.16)
         else:
             # Airborne physics in SI units using lift/drag/thrust/gravity.
             pitch = math.radians(self.angle)

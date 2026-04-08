@@ -31,7 +31,7 @@ SNOW_FRICTION = 0.985
 DEFAULT_GROUND_FRICTION = 0.995
 FLAT_ICE_SLOPE_THRESHOLD = 0.12
 FLAT_ICE_FRICTION = 0.99985
-ZERO_FRICTION_SLOPE_THRESHOLD = 0.04
+ZERO_FRICTION_SLOPE_THRESHOLD = 0.08
 
 # Game States
 STATE_MENU = "menu"
@@ -68,4 +68,11 @@ BOOSTER_TIERS = {
     "pulse_jet": {"name": "Pulse Jet", "boost_mult": 1.35, "fuel": 130, "cost": 1000},
     "ramjet": {"name": "Ramjet", "boost_mult": 1.70, "fuel": 150, "cost": 1900},
 }
+
+RAMP_HEIGHT_TIERS = [
+    {"name": "Base Ramp", "launch_gap_m": 3.0, "cost": 0},
+    {"name": "Raised Ramp", "launch_gap_m": 4.0, "cost": 350},
+    {"name": "Tall Ramp", "launch_gap_m": 5.0, "cost": 900},
+    {"name": "High Ramp", "launch_gap_m": 6.5, "cost": 1700},
+]
 

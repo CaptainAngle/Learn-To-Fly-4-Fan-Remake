@@ -5,9 +5,10 @@ from src.constants import *
 
 
 class Terrain:
-    def __init__(self, width, height):
+    def __init__(self, width, height, ramp_height_level=0):
         self.width = width
         self.height = height
+        self.ramp_height_level = max(0, min(int(ramp_height_level), len(RAMP_HEIGHT_TIERS) - 1))
         self.points = []
         self.ramps = []  # List of ramp segments
         self.generate_terrain()
@@ -22,16 +23,17 @@ class Terrain:
         self.points = []
         self.ramps = []
         start_y = self.height - 520
+        launch_gap_m = RAMP_HEIGHT_TIERS[self.ramp_height_level]["launch_gap_m"]
 
         # Launch section only at the beginning.
         # Profile: almost-flat top -> steep down -> short flat -> ~30deg launch up -> cliff.
         launch_anchors = [
             (0, start_y),
-            (170, start_y + 6),
-            (350, start_y + 170),
-            (430, start_y + 175),
-            (560, start_y + 100),
-            (620, start_y + 70),
+            (180, start_y + 5),
+            (360, start_y + 185),
+            (460, start_y + 190),
+            (580, start_y + 135),
+            (690, start_y + 72),
         ]
 
         launch_points = self._build_smooth_ramp_points(launch_anchors, samples_per_segment=24)
@@ -39,16 +41,13 @@ class Terrain:
         lowest_ramp_y = max(y for _, y in launch_points)
         launch_off_y = launch_anchors[-1][1]  # launch lip height
 
-        # Make snow start much lower than launch-off (approx 10m drop).
-        snow_drop_from_launch_m = 1
-        snow_y = launch_off_y + (snow_drop_from_launch_m * PIXELS_PER_METER)
-        # Keep snow safely below the whole ramp assembly as well.
-        snow_y = max(snow_y, lowest_ramp_y + (0.4 * PIXELS_PER_METER))
+        # Keep snow well below the whole ramp assembly so the lip genuinely launches into air.
+        snow_y = lowest_ramp_y + (launch_gap_m * PIXELS_PER_METER)
         self.points.extend(launch_points)
 
         # Tiny snow shelf right after the launch lip, then a near-vertical drop to snow.
-        shelf_end_x = 632
-        shelf_y = launch_off_y + 6
+        shelf_end_x = 702
+        shelf_y = launch_off_y
         self.points.append((shelf_end_x, shelf_y))
 
         # Snow starts immediately after the drop (no horizontal air gap).
@@ -58,7 +57,7 @@ class Terrain:
         self.points.append((self.width, flat_y))
 
         # Surface zones for physics + rendering.
-        self.ice_end_x = 620
+        self.ice_end_x = shelf_end_x
         self.shelf_snow_end_x = shelf_end_x
         self.snow_start_x = snow_step_x
 
@@ -280,8 +279,8 @@ class Hazard:
 
 
 class Environment:
-    def __init__(self):
-        self.terrain = Terrain(PIXELS_PER_METER * WORLD_LENGTH_M, SCREEN_HEIGHT)
+    def __init__(self, ramp_height_level=0):
+        self.terrain = Terrain(PIXELS_PER_METER * WORLD_LENGTH_M, SCREEN_HEIGHT, ramp_height_level=ramp_height_level)
         self.hazards = []
         self.collectibles = []
         self.spawn_hazards()

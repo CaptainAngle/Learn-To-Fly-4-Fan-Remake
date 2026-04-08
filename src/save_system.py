@@ -26,6 +26,7 @@ class SaveSystem:
         return {
             "total_coins": 0,
             "total_distance": 0,
+            "ramp_height_level": 0,
             "unlocked_sleds": [],
             "unlocked_gliders": [],
             "unlocked_boosters": [],

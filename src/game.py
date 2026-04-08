@@ -66,6 +66,9 @@ class Game:
             save_data["equipped_glider"] = None
         if "equipped_booster" not in save_data:
             save_data["equipped_booster"] = None
+        if "ramp_height_level" not in save_data:
+            save_data["ramp_height_level"] = 0
+        save_data["ramp_height_level"] = max(0, min(int(save_data["ramp_height_level"]), len(RAMP_HEIGHT_TIERS) - 1))
 
         self.game_data = save_data
         
@@ -109,6 +112,8 @@ class Game:
 
         self.buttons["gear_buttons"] = []
         y = 145
+        self.buttons["gear_buttons"].append(("ramp_height", None, Button(SCREEN_WIDTH - 170, y, 140, 28, "Upgrade", (100, 150, 100))))
+        y += 44
         for gear_name in SLED_TIERS.keys():
             btn = Button(SCREEN_WIDTH - 170, y, 140, 28, "Equip/Buy", (100, 150, 100))
             self.buttons["gear_buttons"].append(("sled", gear_name, btn))
@@ -131,7 +136,7 @@ class Game:
     
     def start_flight(self):
         """Initialize a new flight."""
-        self.environment = Environment()
+        self.environment = Environment(ramp_height_level=self.game_data.get("ramp_height_level", 0))
         spawn_x = 80
         spawn_y = self.environment.terrain.get_ground_y_at(spawn_x) - 18
         self.player = Player(spawn_x, spawn_y)
@@ -207,7 +212,10 @@ class Game:
             
             for category, gear_name, button in self.buttons.get("gear_buttons", []):
                 if button.is_clicked(mouse_pos, True):
-                    self.try_purchase_gear(category, gear_name)
+                    if category == "ramp_height":
+                        self.try_purchase_ramp_height()
+                    else:
+                        self.try_purchase_gear(category, gear_name)
         
         elif self.state == STATE_RESULTS:
             if self.buttons["results"][0].is_clicked(mouse_pos, True):
@@ -239,12 +247,27 @@ class Game:
         if gear_name in self.game_data[unlock_key]:
             equip_fn(gear_name)
             self.game_data[equip_key] = gear_name
+            self.save_game()
         else:
             if self.player.coins >= gear_info["cost"]:
                 self.player.coins -= gear_info["cost"]
                 self.game_data[unlock_key].append(gear_name)
                 equip_fn(gear_name)
                 self.game_data[equip_key] = gear_name
+                self.save_game()
+
+    def try_purchase_ramp_height(self):
+        """Advance the launch ramp height upgrade."""
+        current_level = int(self.game_data.get("ramp_height_level", 0))
+        next_level = current_level + 1
+        if next_level >= len(RAMP_HEIGHT_TIERS):
+            return
+
+        next_tier = RAMP_HEIGHT_TIERS[next_level]
+        if self.player.coins >= next_tier["cost"]:
+            self.player.coins -= next_tier["cost"]
+            self.game_data["ramp_height_level"] = next_level
+            self.save_game()
 
     def _get_terrain_slope_at_x(self, x):
         """Return terrain slope under a world x position."""

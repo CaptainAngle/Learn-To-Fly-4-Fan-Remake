@@ -209,6 +209,24 @@ class UIManager:
         self.draw_text(surface, f"Coins: {player.coins}", self.font_medium, (255, 215, 0), 20, 70)
         
         y = 110
+        self.draw_text(surface, "RAMP HEIGHT", self.font_medium, (180, 220, 255), 20, y)
+        y += 30
+        ramp_level = max(0, min(int(game_data.get("ramp_height_level", 0)), len(RAMP_HEIGHT_TIERS) - 1))
+        current_ramp = RAMP_HEIGHT_TIERS[ramp_level]
+        next_ramp = RAMP_HEIGHT_TIERS[ramp_level + 1] if ramp_level < len(RAMP_HEIGHT_TIERS) - 1 else None
+        if next_ramp is not None:
+            affordable = player.coins >= next_ramp["cost"]
+            status_color = (0, 255, 0) if affordable else (255, 120, 120)
+            text = (
+                f"{current_ramp['name']} | Launch gap: {current_ramp['launch_gap_m']:.1f}m | "
+                f"Next: {next_ramp['name']} | Cost: {next_ramp['cost']}$"
+            )
+        else:
+            status_color = (0, 255, 0)
+            text = f"{current_ramp['name']} | Launch gap: {current_ramp['launch_gap_m']:.1f}m | MAX"
+        self.draw_text(surface, text, self.font_small, status_color, 20, y)
+
+        y += 40
         self.draw_text(surface, "SLED", self.font_medium, (180, 220, 255), 20, y)
         y += 30
         for key, stats in SLED_TIERS.items():
