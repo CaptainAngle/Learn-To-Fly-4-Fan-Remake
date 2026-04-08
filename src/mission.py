@@ -36,7 +36,7 @@ class MissionManager:
             Mission(2, "Getting Distance", "Fly 50 m", "distance", 50, 250),
             Mission(3, "Long Haul", "Fly 125 m", "distance", 125, 500),
             Mission(4, "Marathon Flight", "Fly 250 m", "distance", 250, 1000),
-            Mission(5, "Elite Flyer", "Fly 500 m", "distance", 500, 2000),
+            Mission(5, "Elite Flyer", "Fly 1000 m", "distance", 1000, 2000),
         ]
         self.missions = missions
     

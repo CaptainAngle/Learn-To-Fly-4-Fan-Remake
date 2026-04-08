@@ -26,8 +26,12 @@ class SaveSystem:
         return {
             "total_coins": 0,
             "total_distance": 0,
-            "unlocked_gear": ["base"],
-            "equipped_gear": "base",
+            "unlocked_sleds": [],
+            "unlocked_gliders": [],
+            "unlocked_boosters": [],
+            "equipped_sled": None,
+            "equipped_glider": None,
+            "equipped_booster": None,
             "missions": {},
             "best_flight_distance": 0,
         }

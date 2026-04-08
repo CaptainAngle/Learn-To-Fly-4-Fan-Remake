@@ -13,68 +13,108 @@ class Player:
         self.angle = 0  # rotation angle
         
         # Flight stats
-        self.current_gear = "base"
-        self.fuel = 100
-        self.max_fuel = 100
+        self.sled = None
+        self.glider = None
+        self.booster = None
+        self.fuel = 0
+        self.max_fuel = 0
         self.distance_traveled = 0
         self.coins = 0
         self.is_flying = True
         self.is_landed = False
+        self.sled_attached = True
         
-    def update(self, controls, terrain_slope=0.0, boosting=False, grounded=False, surface_friction=0.995):
+    def update(self, controls, terrain_slope=0.0, boosting=False, grounded=False, surface_friction=0.995, can_rotate=True, dt=1.0 / FPS):
         """Update player position and physics."""
         if self.is_landed:
             return
             
-        # Get gear stats
-        gear = GEAR_TYPES[self.current_gear]
+        glider_stats = GLIDER_TIERS.get(self.glider, {"glide_mult": 1.0})
+        booster_stats = BOOSTER_TIERS.get(self.booster, {"boost_mult": 0.0})
         
         # Handle boost (thrust in facing direction)
+        thrust_n = 0.0
         if boosting and self.fuel > 0:
-            boost_force = BOOST_FORCE * gear["acceleration"]
-            rad = math.radians(self.angle)
-            self.vx += math.cos(rad) * boost_force
-            self.vy -= math.sin(rad) * boost_force
-            self.fuel = max(0, self.fuel - 1.0)
+            thrust_n = BOOST_THRUST_N * float(booster_stats["boost_mult"])
+            burn = BOOST_FUEL_BURN_PER_SEC * (0.85 + 0.15 * float(booster_stats["boost_mult"]))
+            self.fuel = max(0.0, self.fuel - burn * dt)
         
-        # Handle rotation
-        if controls.get("left"):
-            self.angle = min(self.angle + ROTATION_SPEED, 45)
-        elif controls.get("right"):
-            self.angle = max(self.angle - ROTATION_SPEED, -45)
+        # Handle pitch: manual in air, automatic on ramp when locked.
+        if can_rotate:
+            if controls.get("left"):
+                self.angle = min(self.angle + ROTATION_SPEED, 45)
+            elif controls.get("right"):
+                self.angle = max(self.angle - ROTATION_SPEED, -45)
         else:
-            # Smooth return to neutral
-            self.angle *= 0.95
+            # Align to slope when on ramp (y grows downward on screen).
+            slope_angle = -math.degrees(math.atan(terrain_slope))
+            self.angle = max(-45, min(45, slope_angle))
         
+        dt = max(1e-4, dt)
         if grounded:
-            # Slide along the terrain tangent.
-            self.vx += GRAVITY * terrain_slope * 2.2
+            # Grounded ramp slide physics (pixel-domain), keeps penguin glued to slope.
+            self.vx += GRAVITY * terrain_slope * 1.5
+            # Small thrust contribution while on ground.
+            if thrust_n > 0:
+                thrust_px = (thrust_n / PLAYER_MASS_KG) * (PIXELS_PER_METER / FPS) * dt * FPS
+                self.vx += max(0.0, math.cos(math.radians(self.angle))) * thrust_px
             self.vx *= surface_friction
             self.vy = self.vx * terrain_slope
-            
-            # Kicker: convert speed into upward launch near sharp upturns.
+
+            # Launch assist at sharp ramp upturns.
             if terrain_slope < -0.45 and self.vx > 5.0:
-                self.vy -= min(6.0, abs(terrain_slope) * self.vx * 0.22)
+                self.vy -= min(4.5, abs(terrain_slope) * self.vx * 0.16)
         else:
-            # Airborne physics.
-            gravity_effect = GRAVITY / gear["glide"]
-            self.vy += gravity_effect
+            # Airborne physics in SI units using lift/drag/thrust/gravity.
+            pitch = math.radians(self.angle)
+
+            vx_ms = self.vx * FPS / PIXELS_PER_METER
+            vy_up_ms = -self.vy * FPS / PIXELS_PER_METER
+            speed_ms = max(0.1, math.hypot(vx_ms, vy_up_ms))
+
+            vel_dir_x = vx_ms / speed_ms
+            vel_dir_y = vy_up_ms / speed_ms
+            flight_path_angle = math.atan2(vy_up_ms, vx_ms)
+
+            alpha = max(math.radians(-25), min(math.radians(25), pitch - flight_path_angle))
+            cl = LIFT_COEFF_0 + LIFT_COEFF_ALPHA * alpha
+            cl = max(LIFT_COEFF_MIN, min(LIFT_COEFF_MAX, cl))
+            cd = DRAG_COEFF_0 + DRAG_INDUCED_K * (cl ** 2)
+
+            wing_area = BASE_WING_AREA_M2 * (float(glider_stats["glide_mult"]) ** 1.35)
+            q = 0.5 * AIR_DENSITY * (speed_ms ** 2)
+            lift_n = q * wing_area * cl
+            drag_n = q * wing_area * cd
+
+            lift_dir_x = -vel_dir_y
+            lift_dir_y = vel_dir_x
+            drag_dir_x = -vel_dir_x
+            drag_dir_y = -vel_dir_y
+
+            thrust_x = thrust_n * math.cos(pitch)
+            thrust_y = thrust_n * math.sin(pitch)
+
+            fx = lift_n * lift_dir_x + drag_n * drag_dir_x + thrust_x
+            fy = lift_n * lift_dir_y + drag_n * drag_dir_y + thrust_y - PLAYER_MASS_KG * GRAVITY_MPS2
+
+            ax = fx / PLAYER_MASS_KG
+            ay = fy / PLAYER_MASS_KG
+
+            dvx_ms = ax * dt
+            dvy_up_ms = ay * dt
+
+            self.vx += dvx_ms * PIXELS_PER_METER / FPS
+            self.vy += (-dvy_up_ms) * PIXELS_PER_METER / FPS
         
-        # Cap velocity
-        speed = math.sqrt(self.vx**2 + self.vy**2)
-        max_speed = MAX_VELOCITY * gear["speed"]
-        if speed > max_speed:
-            scale = max_speed / speed
-            self.vx *= scale
-            self.vy *= scale
-        
+
         # Update position
-        self.x += self.vx
-        self.y += self.vy
+        step_scale = dt * FPS
+        self.x += self.vx * step_scale
+        self.y += self.vy * step_scale
         
         # Track distance (horizontal only)
         if self.vx > 0:
-            self.distance_traveled += self.vx / PIXELS_PER_METER
+            self.distance_traveled += (self.vx * step_scale) / PIXELS_PER_METER
     
     def check_landing(self, terrain_y):
         """Check if player lands on ground."""
@@ -96,13 +136,26 @@ class Player:
         self.is_flying = True
         self.is_landed = False
         self.angle = 0
+        self.sled_attached = self.sled in SLED_TIERS
     
-    def equip_gear(self, gear_name):
-        """Equip a different flight gear."""
-        if gear_name in GEAR_TYPES:
-            self.current_gear = gear_name
-            self.max_fuel = GEAR_TYPES[gear_name]["fuel"]
-            self.fuel = self.max_fuel
+    def equip_sled(self, sled_name):
+        if sled_name in SLED_TIERS or sled_name is None:
+            self.sled = sled_name
+            self.sled_attached = self.sled in SLED_TIERS
+
+    def equip_glider(self, glider_name):
+        if glider_name in GLIDER_TIERS or glider_name is None:
+            self.glider = glider_name
+
+    def equip_booster(self, booster_name):
+        if booster_name in BOOSTER_TIERS:
+            self.booster = booster_name
+            self.max_fuel = BOOSTER_TIERS[booster_name]["fuel"]
+            self.fuel = min(self.fuel, self.max_fuel) if self.fuel > 0 else self.max_fuel
+        elif booster_name is None:
+            self.booster = None
+            self.max_fuel = 0
+            self.fuel = 0
     
     def draw(self, surface):
         """Draw player as a penguin sprite."""

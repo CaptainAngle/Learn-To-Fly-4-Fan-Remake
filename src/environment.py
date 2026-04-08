@@ -11,6 +11,7 @@ class Terrain:
         self.points = []
         self.ramps = []  # List of ramp segments
         self.generate_terrain()
+        self.generate_clouds()
         self.wind_speed = 0
         self.wind_direction = 1
         self.wind_timer = 0
@@ -37,10 +38,10 @@ class Terrain:
         launch_off_y = launch_points[-1][1]  # launch lip height
 
         # Make snow start much lower than launch-off (approx 10m drop).
-        snow_drop_from_launch_m = 10
+        snow_drop_from_launch_m = 1
         snow_y = launch_off_y + (snow_drop_from_launch_m * PIXELS_PER_METER)
         # Keep snow safely below the whole ramp assembly as well.
-        snow_y = max(snow_y, lowest_ramp_y + (4 * PIXELS_PER_METER))
+        snow_y = max(snow_y, lowest_ramp_y + (0.4 * PIXELS_PER_METER))
         self.points.extend(launch_points)
 
         # Tiny snow shelf right after the launch lip, then a near-vertical drop to snow.
@@ -72,6 +73,20 @@ class Terrain:
                     'y2': curr_y,
                     'slope': slope,
                 })
+
+    def generate_clouds(self):
+        """Generate world-anchored clouds that drift gently with wind."""
+        self.clouds = []
+        cloud_y_choices = [55, 85, 120, 155, 190, 235]
+        cloud_count = 9
+        spacing = max(600, self.width // cloud_count)
+        for i in range(cloud_count):
+            self.clouds.append({
+                "x": 120 + i * spacing + random.randint(-140, 140),
+                "y": random.choice(cloud_y_choices) + random.randint(-12, 18),
+                "s": random.randint(26, 44),
+                "drift": random.uniform(0.15, 0.45),
+            })
     
     def apply_ramp_boost(self, player, terrain_y):
         """Calculate slope at player position."""
@@ -112,6 +127,14 @@ class Terrain:
                 "vx": self.wind_speed * 2,
                 "life": 30,
             })
+
+        # Update cloud positions (slow wind drift, wrapped through world bounds).
+        for c in self.clouds:
+            c["x"] += self.wind_speed * c["drift"]
+            if c["x"] < -200:
+                c["x"] = self.width + 200
+            elif c["x"] > self.width + 200:
+                c["x"] = -200
     
     def get_ground_y_at(self, x):
         """Get terrain height at a specific x coordinate (linear interpolation)."""
@@ -175,7 +198,7 @@ class Hazard:
 
 class Environment:
     def __init__(self):
-        self.terrain = Terrain(SCREEN_WIDTH * 8, SCREEN_HEIGHT)
+        self.terrain = Terrain(PIXELS_PER_METER * WORLD_LENGTH_M, SCREEN_HEIGHT)
         self.hazards = []
         self.collectibles = []
         self.spawn_hazards()
