@@ -24,6 +24,7 @@ class Player:
         self.is_landed = False
         self.sled_attached = True
         self.has_been_airborne = False
+        self.is_thrusting = False
         
     def update(self, controls, terrain_slope=0.0, boosting=False, grounded=False, surface_friction=0.995, can_rotate=True, dt=1.0 / FPS):
         """Update player position and physics."""
@@ -39,6 +40,7 @@ class Player:
             thrust_n = BOOST_THRUST_N * float(booster_stats["boost_mult"])
             burn = BOOST_FUEL_BURN_PER_SEC * (0.85 + 0.15 * float(booster_stats["boost_mult"]))
             self.fuel = max(0.0, self.fuel - burn * dt)
+        self.is_thrusting = thrust_n > 0.0
         
         # Handle pitch: manual in air, automatic on ramp when locked.
         if can_rotate:
@@ -91,7 +93,7 @@ class Player:
             fx_ground = 0.0
             fy_ground = 0.0
             if ground_aero_enabled:
-                fx_ground = lift_n * lift_dir_x + drag_n * drag_dir_x + thrust_x
+                fx_ground = 0.0
                 fy_ground = lift_n * lift_dir_y + drag_n * drag_dir_y + thrust_y - PLAYER_MASS_KG * GRAVITY_MPS2
 
             ax_ground = fx_ground / PLAYER_MASS_KG
@@ -103,14 +105,21 @@ class Player:
                 self.vy += (-ay_up * dt) * PIXELS_PER_METER / FPS
 
             # Gravity projected along the slope.
-            self.vx += GRAVITY * terrain_slope * 1.5
-            self.vx *= surface_friction
+            # Maintain velocity as tangent-aligned scalar through slope transitions.
+            norm = math.sqrt(1.0 + terrain_slope * terrain_slope)
+            tx = 1.0 / norm
+            ty = terrain_slope / norm
+            vt_px = self.vx * tx + self.vy * ty
+            
+            vt_px += GRAVITY * terrain_slope * RAMP_GRAVITY_ALONG_SLOPE_MULT
+            vt_px *= surface_friction
+            
             if fy_ground <= 0:
-                self.vy = self.vx * terrain_slope
+                self.vx = tx * vt_px
+                self.vy = ty * vt_px
 
             # Launch assist at sharp ramp upturns.
-            if terrain_slope < -0.45 and self.vx > 5.0:
-                self.vy -= min(4.5, abs(terrain_slope) * self.vx * 0.16)
+            # Launch assist disabled to prevent artificial acceleration on uphill sections.
         else:
             # Airborne physics in SI units using lift/drag/thrust/gravity.
             pitch = math.radians(self.angle)
@@ -188,6 +197,7 @@ class Player:
         self.angle = 0
         self.sled_attached = self.sled in SLED_TIERS
         self.has_been_airborne = False
+        self.is_thrusting = False
     
     def equip_sled(self, sled_name):
         if sled_name in SLED_TIERS or sled_name is None:

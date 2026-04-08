@@ -46,6 +46,7 @@ class Game:
         self.flight_coins_earned = 0
         self.mission_completed_this_flight = False
         self.low_speed_frames = 0
+        self.shop_catalog_category = None
     
     def load_or_create_save(self):
         """Load existing save or create new one."""
@@ -69,6 +70,9 @@ class Game:
         if "ramp_height_level" not in save_data:
             save_data["ramp_height_level"] = 0
         save_data["ramp_height_level"] = max(0, min(int(save_data["ramp_height_level"]), len(RAMP_HEIGHT_TIERS) - 1))
+        if "ramp_drop_level" not in save_data:
+            save_data["ramp_drop_level"] = 0
+        save_data["ramp_drop_level"] = max(0, min(int(save_data["ramp_drop_level"]), len(RAMP_DROP_TIERS) - 1))
 
         self.game_data = save_data
         
@@ -105,29 +109,22 @@ class Game:
                 self.buttons["mission_buttons"] = []
             self.buttons["mission_buttons"].append(btn)
         
-        # Upgrade screen buttons
+        # Upgrade screen buttons + box layout + catalog controls.
         self.buttons["upgrade"] = [
             Button(50, SCREEN_HEIGHT - 80, 120, 60, "Back", (100, 100, 100)),
+            Button(SCREEN_WIDTH - 190, 86, 150, 30, "Upgrade", (100, 150, 100)),
+            Button(SCREEN_WIDTH - 190, 136, 150, 30, "Upgrade", (100, 150, 100)),
         ]
-
-        self.buttons["gear_buttons"] = []
-        y = 145
-        self.buttons["gear_buttons"].append(("ramp_height", None, Button(SCREEN_WIDTH - 170, y, 140, 28, "Upgrade", (100, 150, 100))))
-        y += 44
-        for gear_name in SLED_TIERS.keys():
-            btn = Button(SCREEN_WIDTH - 170, y, 140, 28, "Equip/Buy", (100, 150, 100))
-            self.buttons["gear_buttons"].append(("sled", gear_name, btn))
-            y += 34
-        y += 10
-        for gear_name in GLIDER_TIERS.keys():
-            btn = Button(SCREEN_WIDTH - 170, y, 140, 28, "Equip/Buy", (100, 150, 100))
-            self.buttons["gear_buttons"].append(("glider", gear_name, btn))
-            y += 34
-        y += 10
-        for gear_name in BOOSTER_TIERS.keys():
-            btn = Button(SCREEN_WIDTH - 170, y, 140, 28, "Equip/Buy", (100, 150, 100))
-            self.buttons["gear_buttons"].append(("booster", gear_name, btn))
-            y += 34
+        self.buttons["upgrade_boxes"] = {
+            "sled": Button(120, 230, 420, 210, "Sled", (70, 110, 150)),
+            "glider": Button(660, 230, 420, 210, "Glider", (70, 120, 165)),
+            "booster": Button(120, 490, 420, 210, "Engine", (75, 115, 155)),
+            "future": Button(660, 490, 420, 210, "Reserved", (55, 65, 85)),
+        }
+        self.buttons["catalog_close"] = Button(910, 190, 160, 36, "Close", (120, 90, 90))
+        self.buttons["catalog_items"] = [
+            Button(860, 255 + i * 92, 180, 38, "", (100, 150, 100)) for i in range(4)
+        ]
         
         # Results screen buttons
         self.buttons["results"] = [
@@ -136,7 +133,10 @@ class Game:
     
     def start_flight(self):
         """Initialize a new flight."""
-        self.environment = Environment(ramp_height_level=self.game_data.get("ramp_height_level", 0))
+        self.environment = Environment(
+            ramp_height_level=self.game_data.get("ramp_height_level", 0),
+            ramp_drop_level=self.game_data.get("ramp_drop_level", 0),
+        )
         spawn_x = 80
         spawn_y = self.environment.terrain.get_ground_y_at(spawn_x) - 18
         self.player = Player(spawn_x, spawn_y)
@@ -209,13 +209,32 @@ class Game:
         elif self.state == STATE_UPGRADE:
             if self.buttons["upgrade"][0].is_clicked(mouse_pos, True):
                 self.state = STATE_MENU
-            
-            for category, gear_name, button in self.buttons.get("gear_buttons", []):
-                if button.is_clicked(mouse_pos, True):
-                    if category == "ramp_height":
-                        self.try_purchase_ramp_height()
-                    else:
-                        self.try_purchase_gear(category, gear_name)
+                self.shop_catalog_category = None
+                return
+
+            if self.buttons["upgrade"][1].is_clicked(mouse_pos, True):
+                self.try_purchase_ramp_height()
+            if self.buttons["upgrade"][2].is_clicked(mouse_pos, True):
+                self.try_purchase_ramp_drop()
+
+            if self.shop_catalog_category:
+                if self.buttons["catalog_close"].is_clicked(mouse_pos, True):
+                    self.shop_catalog_category = None
+                    return
+
+                entries = self.get_catalog_entries(self.shop_catalog_category)
+                for i, button in enumerate(self.buttons["catalog_items"]):
+                    if i < len(entries) and button.is_clicked(mouse_pos, True):
+                        gear_name = entries[i][0]
+                        self.try_purchase_gear(self.shop_catalog_category, gear_name)
+                return
+
+            if self.buttons["upgrade_boxes"]["sled"].is_clicked(mouse_pos, True):
+                self.shop_catalog_category = "sled"
+            elif self.buttons["upgrade_boxes"]["glider"].is_clicked(mouse_pos, True):
+                self.shop_catalog_category = "glider"
+            elif self.buttons["upgrade_boxes"]["booster"].is_clicked(mouse_pos, True):
+                self.shop_catalog_category = "booster"
         
         elif self.state == STATE_RESULTS:
             if self.buttons["results"][0].is_clicked(mouse_pos, True):
@@ -269,6 +288,29 @@ class Game:
             self.game_data["ramp_height_level"] = next_level
             self.save_game()
 
+    def try_purchase_ramp_drop(self):
+        """Advance the downhill ramp depth upgrade."""
+        current_level = int(self.game_data.get("ramp_drop_level", 0))
+        next_level = current_level + 1
+        if next_level >= len(RAMP_DROP_TIERS):
+            return
+
+        next_tier = RAMP_DROP_TIERS[next_level]
+        if self.player.coins >= next_tier["cost"]:
+            self.player.coins -= next_tier["cost"]
+            self.game_data["ramp_drop_level"] = next_level
+            self.save_game()
+
+    def get_catalog_entries(self, category):
+        """Return ordered gear tuples for the selected shop catalog."""
+        if category == "sled":
+            return list(SLED_TIERS.items())
+        if category == "glider":
+            return list(GLIDER_TIERS.items())
+        if category == "booster":
+            return list(BOOSTER_TIERS.items())
+        return []
+
     def _get_terrain_slope_at_x(self, x):
         """Return terrain slope under a world x position."""
         points = self.environment.terrain.points
@@ -315,10 +357,13 @@ class Game:
             terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
             slope = self._get_terrain_slope_at_x(self.player.x)
             surface_type = self.environment.terrain.get_surface_type_at(self.player.x)
+            force_ramp_lock = (surface_type == "ice" and self.player.x <= self.environment.terrain.ice_end_x)
 
             # Ground contact: allow small tolerance so steep up-ramp transitions stay attached.
             bottom = self.player.y + self.player.size
             grounded = (bottom >= terrain_y - 3) and (bottom <= terrain_y + 18)
+            if force_ramp_lock:
+                grounded = True
             if grounded:
                 self.player.y = terrain_y - self.player.size
 
@@ -346,6 +391,10 @@ class Game:
             if grounded and surface_type == "ice" and self.player.sled_attached and self.player.sled in SLED_TIERS:
                 sled_mult = SLED_TIERS[self.player.sled]["ramp_friction_mult"]
                 friction = min(0.9995, friction * sled_mult)
+
+            # Ramp friction tuning: divide effective drag loss by ~7 on ramp ice.
+            if grounded and surface_type == "ice":
+                friction = 1.0 - ((1.0 - friction) / 7.0)
 
 
             self.player.update(
@@ -397,6 +446,16 @@ class Game:
                     self._project_velocity_to_slope(slope, preserve_ratio=preserve_ratio)
                     surface_type = sample_surface
                     grounded = True
+
+            # Hard lock to ramp while still on launch ice so the penguin cannot drop off early.
+            surface_type = self.environment.terrain.get_surface_type_at(self.player.x)
+            if surface_type == "ice" and self.player.x <= self.environment.terrain.ice_end_x:
+                lock_terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
+                lock_slope = self._get_terrain_slope_at_x(self.player.x)
+                self.player.y = lock_terrain_y - self.player.size
+                self._project_velocity_to_slope(lock_slope, preserve_ratio=0.0)
+                grounded = True
+                slope = lock_slope
 
             self.environment.update()
 
@@ -469,15 +528,34 @@ class Game:
         elif self.state == STATE_UPGRADE:
             for button in self.buttons["upgrade"]:
                 button.update(mouse_pos)
-            for _, _, button in self.buttons.get("gear_buttons", []):
+            for button in self.buttons["upgrade_boxes"].values():
                 button.update(mouse_pos)
-            self.ui_manager.draw_upgrade_screen(self.screen, self.player, self.game_data, 
-                                               self.buttons["upgrade"] + [b for _, _, b in self.buttons.get("gear_buttons", [])])
+            if self.shop_catalog_category:
+                self.buttons["catalog_close"].update(mouse_pos)
+                for button in self.buttons["catalog_items"]:
+                    button.update(mouse_pos)
+            self.ui_manager.draw_upgrade_screen(
+                self.screen,
+                self.player,
+                self.game_data,
+                self.buttons["upgrade"],
+                self.buttons["upgrade_boxes"],
+                self.shop_catalog_category,
+                self.get_catalog_entries(self.shop_catalog_category),
+                self.buttons["catalog_items"],
+                self.buttons["catalog_close"],
+            )
         
         elif self.state == STATE_PLAYING:
             # Draw game with camera offset
             # Draw background (not affected by camera)
-            self.screen.fill((135, 206, 235))
+            # Sky gradient for depth
+            for y in range(SCREEN_HEIGHT):
+                ratio = y / SCREEN_HEIGHT
+                r = int(COLOR_SKY[0] + (COLOR_SKY_DARK[0] - COLOR_SKY[0]) * ratio)
+                g = int(COLOR_SKY[1] + (COLOR_SKY_DARK[1] - COLOR_SKY[1]) * ratio)
+                b = int(COLOR_SKY[2] + (COLOR_SKY_DARK[2] - COLOR_SKY[2]) * ratio)
+                pygame.draw.line(self.screen, (r, g, b), (0, y), (SCREEN_WIDTH, y))
             
             # Draw game elements with camera offset applied
             self.draw_terrain_with_camera(self.screen)
@@ -523,10 +601,14 @@ class Game:
             cy = cloud_world_y - offset_y
             s = cloud["s"]
             if -120 < cx < SCREEN_WIDTH + 120:
-                pygame.draw.circle(surface, (248, 248, 248), (int(cx), int(cy)), s)
-                pygame.draw.circle(surface, (248, 248, 248), (int(cx + s * 0.9), int(cy + s * 0.05)), int(s * 1.05))
-                pygame.draw.circle(surface, (248, 248, 248), (int(cx - s * 0.8), int(cy + s * 0.05)), int(s * 0.85))
-                pygame.draw.circle(surface, (245, 245, 245), (int(cx + s * 0.2), int(cy - s * 0.35)), int(s * 0.95))
+                # Cloud shadow for depth
+                pygame.draw.circle(surface, (220, 225, 235), (int(cx + 1), int(cy + 1)), int(s * 1.05))
+                # Main cloud
+                pygame.draw.circle(surface, (250, 251, 255), (int(cx), int(cy)), s)
+                pygame.draw.circle(surface, (250, 251, 255), (int(cx + s * 0.9), int(cy + s * 0.05)), int(s * 1.05))
+                pygame.draw.circle(surface, (250, 251, 255), (int(cx - s * 0.8), int(cy + s * 0.05)), int(s * 0.85))
+                # Cloud highlight
+                pygame.draw.circle(surface, (255, 255, 255), (int(cx + s * 0.2), int(cy - s * 0.35)), int(s * 0.95))
         
         # Draw terrain base polygon (snow shadow)
         if len(terrain.points) > 1:
@@ -534,7 +616,7 @@ class Game:
             terrain_points.append((self.environment.terrain.width - offset, SCREEN_HEIGHT * 2))
             terrain_points.append((0 - offset, SCREEN_HEIGHT * 2))
             
-            pygame.draw.polygon(surface, (210, 220, 235), terrain_points)
+            pygame.draw.polygon(surface, (200, 215, 235), terrain_points)
 
         # Draw top surface by material.
         for i in range(len(terrain.points) - 1):
@@ -543,18 +625,20 @@ class Game:
             mid_x = (x1 + x2) * 0.5
             mat = terrain.get_surface_type_at(mid_x)
             if mat == "ice":
-                top_color = (160, 220, 255)
-                edge_color = (220, 245, 255)
+                top_color = (150, 210, 250)
+                edge_color = (210, 240, 255)
                 width = 6
             elif mat == "snow":
-                top_color = (245, 248, 255)
-                edge_color = (255, 255, 255)
+                top_color = (250, 251, 255)
+                edge_color = (240, 245, 255)
                 width = 8
             else:
                 continue
 
             pygame.draw.line(surface, top_color, (x1 - offset, y1 - offset_y), (x2 - offset, y2 - offset_y), width)
             pygame.draw.line(surface, edge_color, (x1 - offset, y1 - offset_y), (x2 - offset, y2 - offset_y), 2)
+            # Shadow line below surface for depth
+            pygame.draw.line(surface, (200, 220, 240), (x1 - offset, y1 - offset_y + 2), (x2 - offset, y2 - offset_y + 2), 1)
 
             # Texture marks anchored to world coordinates so ground motion is visible.
             seg_len = max(1.0, ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5)
@@ -596,11 +680,16 @@ class Game:
                 else:  # ice
                     pygame.draw.line(
                         surface,
-                        (185, 235, 250),
+                        (170, 225, 245),
                         (mx - offset - 3, my - offset_y - 1),
                         (mx - offset + 3, my - offset_y + 1),
                         1,
                     )
+                    # Additional subtle marks for ice texture
+                    seed = int(mx * 0.37 + my * 1.91 + j * 13 + i * 101)
+                    rand_d = ((seed * 1103515245 + 12345) & 0x7FFFFFFF) / 0x7FFFFFFF
+                    if rand_d > 0.7:
+                        pygame.draw.line(surface, (190, 235, 252), (mx - offset, my - offset_y - 2), (mx - offset + 1, my - offset_y + 2), 1)
         
         # Draw terrain outline
         for i in range(len(terrain.points) - 1):
@@ -620,7 +709,10 @@ class Game:
         for p in terrain.wind_particles:
             if -50 < p["x"] - offset < SCREEN_WIDTH + 50:
                 size = max(1, int(2 * (p["life"] / 30)))
-                pygame.draw.circle(surface, (180, 180, 180), (int(p["x"] - offset), int(p["y"] - offset_y)), size)
+                # Wind particles with gradient effect
+                alpha = int(100 * (p["life"] / 30))
+                color = (200, 220, 240)
+                pygame.draw.circle(surface, color, (int(p["x"] - offset), int(p["y"] - offset_y)), size)
         
         # Draw hazards with camera offset
         for hazard in self.environment.hazards:
@@ -628,15 +720,25 @@ class Game:
             hazard_screen_y = hazard.y - offset_y
             if -50 < hazard_screen_x < SCREEN_WIDTH + 50:  # Only draw if visible
                 if hazard.type == "spike":
-                    pygame.draw.polygon(surface, (255, 0, 0), [
+                    pygame.draw.polygon(surface, (255, 80, 80), [
                         (hazard_screen_x, hazard_screen_y - hazard.size),
                         (hazard_screen_x - hazard.size, hazard_screen_y + hazard.size),
                         (hazard_screen_x + hazard.size, hazard_screen_y + hazard.size),
                     ])
+                    # Spike highlight
+                    pygame.draw.polygon(surface, (255, 150, 150), [
+                        (hazard_screen_x, hazard_screen_y - hazard.size + 2),
+                        (hazard_screen_x - hazard.size * 0.5, hazard_screen_y),
+                        (hazard_screen_x + hazard.size * 0.3, hazard_screen_y),
+                    ])
                 elif hazard.type == "wall":
-                    pygame.draw.rect(surface, (128, 128, 128), 
+                    pygame.draw.rect(surface, (140, 150, 165), 
                                    (hazard_screen_x - hazard.size, hazard_screen_y - hazard.size * 2, 
                                     hazard.size * 2, hazard.size * 4))
+                    # Wall texture
+                    pygame.draw.rect(surface, (160, 170, 185), 
+                                    (hazard_screen_x - hazard.size + 2, hazard_screen_y - hazard.size * 2 + 2, 
+                                     hazard.size * 2 - 4, hazard.size * 4 - 4))
     
     def draw_player_with_camera(self, surface):
         """Draw player with camera offset applied."""
@@ -652,8 +754,8 @@ class Game:
             cy = int(size * 1.5)
 
             # Belly-sliding penguin: half-ellipse cut on the MINOR diameter (vertical cut).
-            body_left = size * 0.36
-            body_top = size * 0.68
+            body_left = size * (2.0 - 3.45 * 0.5)
+            body_top = size * (1.5 - 1.50 * 0.5)
             body_w = size * 3.45
             body_h = size * 1.50
             cx_body = body_left + body_w * 0.50
@@ -670,25 +772,37 @@ class Game:
                 y = cy_body + ry * math.sin(theta)
                 half_body.append((x, y))
             half_body.append((cx_body, cy_body + ry))
-            pygame.draw.polygon(sprite, (20, 20, 20), half_body)
+            pygame.draw.polygon(sprite, (30, 35, 45), half_body)
+            # Dark shading on the back
+            pygame.draw.polygon(sprite, (15, 18, 25), [(cx_body - size * 0.05, cy_body - ry), (cx_body, cy_body - ry), (cx_body, cy_body + ry), (cx_body - size * 0.05, cy_body + ry)])
 
             # White belly patch in the lower-front part.
             belly_left = cx_body + size * 0.42
             belly_top = cy_body + size * 0.02
             belly_w = size * 1.25
             belly_h = size * 0.62
-            pygame.draw.ellipse(sprite, (236, 236, 236), (belly_left, belly_top, belly_w, belly_h))
+            pygame.draw.ellipse(sprite, (245, 248, 250), (belly_left, belly_top, belly_w, belly_h))
+            # Subtle belly shading
+            pygame.draw.ellipse(sprite, (225, 235, 242), (belly_left + size * 0.08, belly_top + size * 0.15, belly_w - size * 0.16, belly_h * 0.5))
 
             # Side beak at front.
-            pygame.draw.polygon(sprite, (255, 160, 0), [
+            pygame.draw.polygon(sprite, (255, 150, 0), [
                 (cx_body + rx * 0.97, cy_body - size * 0.08),
                 (cx_body + rx * 1.36, cy_body),
                 (cx_body + rx * 0.97, cy_body + size * 0.09),
             ])
+            pygame.draw.polygon(sprite, (200, 110, 0), [
+                (cx_body + rx * 0.97, cy_body - size * 0.08),
+                (cx_body + rx * 1.15, cy_body - size * 0.02),
+                (cx_body + rx * 0.97, cy_body + size * 0.03),
+            ])
 
             # Eye near front/top.
-            pygame.draw.circle(sprite, (255, 255, 255), (int(cx_body + rx * 0.60), int(cy_body - ry * 0.30)), int(size * 0.11))
-            pygame.draw.circle(sprite, (0, 0, 0), (int(cx_body + rx * 0.66), int(cy_body - ry * 0.28)), int(size * 0.05))
+            eye_x = int(cx_body + rx * 0.60)
+            eye_y = int(cy_body - ry * 0.30)
+            pygame.draw.circle(sprite, (255, 255, 255), (eye_x, eye_y), int(size * 0.12))
+            pygame.draw.circle(sprite, (10, 10, 20), (eye_x + int(size * 0.03), eye_y - int(size * 0.02)), int(size * 0.06))
+            pygame.draw.circle(sprite, (255, 255, 255), (eye_x + int(size * 0.05), eye_y - int(size * 0.03)), int(size * 0.02))
 
             # Feet under body for sliding silhouette.
             feet_w = size * 0.52
@@ -741,15 +855,21 @@ class Game:
         # Sled layer (only while attached on ramp).
         if player.sled_attached:
             sled_color = {
-                "the_plank": (142, 98, 59),
-                "plank_mk2": (124, 86, 52),
-                "good_ol_sled": (116, 62, 34),
-                "bobsled": (70, 90, 120),
+                "the_plank": (160, 110, 60),
+                "plank_mk2": (145, 95, 50),
+                "good_ol_sled": (130, 75, 35),
+                "bobsled": (65, 100, 145),
             }[player.sled]
             pygame.draw.ellipse(
                 canvas,
                 sled_color,
                 (cx - size * 0.7 * gear_scale, cy + size * 0.72 * gear_scale, size * 1.55 * gear_scale, size * 0.28 * gear_scale),
+            )
+            # Sled shading/highlight
+            pygame.draw.ellipse(
+                canvas,
+                tuple(min(c + 40, 255) for c in sled_color),
+                (cx - size * 0.68 * gear_scale, cy + size * 0.73 * gear_scale, size * 1.40 * gear_scale, size * 0.08 * gear_scale),
             )
 
         # Glider layer.
@@ -771,12 +891,19 @@ class Game:
                 (kite_x + kite_w * 0.5 - slant, kite_y + kite_h * 0.5),
                 (kite_x - kite_w * 0.5 - slant, kite_y + kite_h * 0.5),
             ])
+            # Kite shading
+            pygame.draw.polygon(canvas, (90, 220, 115), [
+                (kite_x - kite_w * 0.4 + slant, kite_y - kite_h * 0.3),
+                (kite_x + kite_w * 0.3 + slant, kite_y - kite_h * 0.3),
+                (kite_x + kite_w * 0.25 - slant, kite_y + kite_h * 0.2),
+                (kite_x - kite_w * 0.35 - slant, kite_y + kite_h * 0.2),
+            ])
             pygame.draw.line(
                 canvas,
-                (150, 235, 165),
+                (160, 245, 175),
                 (kite_x - kite_w * 0.45 + slant, kite_y - kite_h * 0.18),
                 (kite_x + kite_w * 0.45 + slant, kite_y - kite_h * 0.18),
-                1,
+                2,
             )
 
         elif player.glider in ("old_glider", "hand_glider"):
@@ -784,14 +911,16 @@ class Game:
                 wing_len = 0.95
                 wing_thickness = 0.10
                 mast_h = 0.62
-                color_main = (95, 115, 150)
-                color_highlight = (185, 205, 235)
+                color_main = (85, 120, 160)
+                color_highlight = (180, 220, 255)
+                color_shadow = (60, 85, 120)
             else:  # hand_glider
                 wing_len = 1.20
                 wing_thickness = 0.11
                 mast_h = 0.68
-                color_main = (78, 102, 140)
-                color_highlight = (170, 195, 235)
+                color_main = (80, 130, 180)
+                color_highlight = (200, 235, 255)
+                color_shadow = (50, 75, 110)
 
             # Back-mounted anchor (penguin faces right, so back is left side).
             mast_base = (cx - size * 0.12 * gear_scale, cy + size * 0.05 * gear_scale)
@@ -803,6 +932,13 @@ class Game:
             # Thin side-view wing profile above penguin.
             wing_x = mast_top[0]
             wing_y = mast_top[1] + size * 0.18 * gear_scale
+            # Wing shadow for depth
+            pygame.draw.polygon(canvas, color_shadow, [
+                (wing_x + size * 0.14 * gear_scale, wing_y - size * wing_thickness * gear_scale + 1),
+                (wing_x - size * wing_len * gear_scale + 1, wing_y - size * (wing_thickness * 0.55) * gear_scale + 1),
+                (wing_x - size * (wing_len - 0.18) * gear_scale, wing_y + size * wing_thickness * gear_scale + 1),
+                (wing_x + size * 0.1 * gear_scale, wing_y + size * (wing_thickness * 0.7) * gear_scale + 1),
+            ])
             pygame.draw.polygon(canvas, color_main, [
                 (wing_x + size * 0.12 * gear_scale, wing_y - size * wing_thickness * gear_scale),
                 (wing_x - size * wing_len * gear_scale, wing_y - size * (wing_thickness * 0.55) * gear_scale),
@@ -814,7 +950,7 @@ class Game:
                 color_highlight,
                 (wing_x + size * 0.08 * gear_scale, wing_y - size * (wing_thickness * 0.2) * gear_scale),
                 (wing_x - size * (wing_len - 0.15) * gear_scale, wing_y - size * (wing_thickness * 0.05) * gear_scale),
-                1,
+                2,
             )
             # Small rear support strap to keep the glider looking strapped on.
             pygame.draw.line(
@@ -827,24 +963,79 @@ class Game:
 
         # Booster layer.
         gear = player.booster
+        nozzle_pos = None
         if gear == "sugar_rocket":
-            pygame.draw.rect(
-                canvas,
-                (120, 120, 130),
-                (cx - size * 0.95 * gear_scale, cy - size * 0.1 * gear_scale, size * 0.45 * gear_scale, size * 0.8 * gear_scale),
-                border_radius=6,
-            )
-            pygame.draw.rect(canvas, (230, 90, 30), (cx - size * 1.0 * gear_scale, cy + size * 0.55 * gear_scale, size * 0.16 * gear_scale, size * 0.22 * gear_scale))
-            pygame.draw.rect(canvas, (230, 90, 30), (cx - size * 0.62 * gear_scale, cy + size * 0.55 * gear_scale, size * 0.16 * gear_scale, size * 0.22 * gear_scale))
+            # Side-mounted model rocket with pointed nose (front/right) and rear nozzle (left).
+            body_x = cx - size * 0.78 * gear_scale
+            body_y = cy - size * 0.02 * gear_scale
+            body_w = size * 0.86 * gear_scale
+            body_h = size * 0.22 * gear_scale
+            pygame.draw.rect(canvas, (205, 212, 225), (body_x, body_y, body_w, body_h), border_radius=5)
+            pygame.draw.rect(canvas, (235, 240, 250), (body_x + size * 0.08 * gear_scale, body_y + size * 0.03 * gear_scale, body_w * 0.58, body_h * 0.28), border_radius=3)
+            nose = [
+                (body_x + body_w, body_y + body_h * 0.5),
+                (body_x + body_w + size * 0.16 * gear_scale, body_y + body_h * 0.3),
+                (body_x + body_w + size * 0.16 * gear_scale, body_y + body_h * 0.7),
+            ]
+            pygame.draw.polygon(canvas, (210, 80, 80), nose)
+            fin_back = [
+                (body_x + size * 0.08 * gear_scale, body_y + body_h * 0.02),
+                (body_x - size * 0.09 * gear_scale, body_y - size * 0.07 * gear_scale),
+                (body_x + size * 0.12 * gear_scale, body_y + body_h * 0.36),
+            ]
+            fin_low = [
+                (body_x + size * 0.08 * gear_scale, body_y + body_h * 0.98),
+                (body_x - size * 0.09 * gear_scale, body_y + body_h + size * 0.07 * gear_scale),
+                (body_x + size * 0.12 * gear_scale, body_y + body_h * 0.64),
+            ]
+            pygame.draw.polygon(canvas, (185, 65, 65), fin_back)
+            pygame.draw.polygon(canvas, (185, 65, 65), fin_low)
+            pygame.draw.rect(canvas, (95, 100, 115), (body_x - size * 0.09 * gear_scale, body_y + body_h * 0.32, size * 0.1 * gear_scale, body_h * 0.36), border_radius=2)
+            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.08 * gear_scale, cy + size * 0.05 * gear_scale), (body_x + size * 0.18 * gear_scale, body_y + body_h * 0.25), 2)
+            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.08 * gear_scale, cy + size * 0.21 * gear_scale), (body_x + size * 0.18 * gear_scale, body_y + body_h * 0.75), 2)
+            nozzle_pos = (body_x - size * 0.09 * gear_scale, body_y + body_h * 0.5)
 
         elif gear == "pulse_jet":
-            pygame.draw.rect(canvas, (98, 98, 112), (cx - size * 1.05 * gear_scale, cy - size * 0.12 * gear_scale, size * 0.52 * gear_scale, size * 0.88 * gear_scale), border_radius=6)
-            pygame.draw.circle(canvas, (255, 185, 60), (int(cx - size * 1.08 * gear_scale), int(cy + size * 0.72 * gear_scale)), int(size * 0.09 * gear_scale))
+            # Long skinny pulse jet with thicker intake/front section.
+            tube_x = cx - size * 1.02 * gear_scale
+            tube_y = cy + size * 0.03 * gear_scale
+            tube_w = size * 1.20 * gear_scale
+            tube_h = size * 0.13 * gear_scale
+            pygame.draw.rect(canvas, (105, 112, 126), (tube_x, tube_y, tube_w, tube_h), border_radius=3)
+            pygame.draw.rect(canvas, (145, 152, 168), (tube_x + size * 0.08 * gear_scale, tube_y + size * 0.02 * gear_scale, tube_w * 0.65, tube_h * 0.24), border_radius=2)
+            intake_x = tube_x + tube_w - size * 0.02 * gear_scale
+            intake_y = tube_y - size * 0.03 * gear_scale
+            intake_w = size * 0.28 * gear_scale
+            intake_h = size * 0.19 * gear_scale
+            pygame.draw.ellipse(canvas, (120, 128, 144), (intake_x, intake_y, intake_w, intake_h))
+            pygame.draw.ellipse(canvas, (82, 88, 102), (intake_x + size * 0.04 * gear_scale, intake_y + size * 0.03 * gear_scale, intake_w * 0.66, intake_h * 0.66))
+            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.04 * gear_scale, cy + size * 0.05 * gear_scale), (tube_x + size * 0.36 * gear_scale, tube_y + tube_h * 0.2), 2)
+            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.04 * gear_scale, cy + size * 0.22 * gear_scale), (tube_x + size * 0.36 * gear_scale, tube_y + tube_h * 0.8), 2)
+            nozzle_pos = (tube_x - size * 0.03 * gear_scale, tube_y + tube_h * 0.5)
 
         elif gear == "ramjet":
-            pygame.draw.rect(canvas, (70, 76, 92), (cx - size * 1.15 * gear_scale, cy - size * 0.16 * gear_scale, size * 0.58 * gear_scale, size * 0.95 * gear_scale), border_radius=7)
-            pygame.draw.circle(canvas, (255, 200, 80), (int(cx - size * 1.2 * gear_scale), int(cy + size * 0.74 * gear_scale)), int(size * 0.1 * gear_scale))
-            pygame.draw.circle(canvas, (255, 120, 70), (int(cx - size * 1.24 * gear_scale), int(cy + size * 0.74 * gear_scale)), int(size * 0.05 * gear_scale))
+            # Airplane-style ramjet nacelle with intake lip and tapered exhaust.
+            nacelle_x = cx - size * 1.00 * gear_scale
+            nacelle_y = cy - size * 0.03 * gear_scale
+            nacelle_w = size * 1.08 * gear_scale
+            nacelle_h = size * 0.24 * gear_scale
+            pygame.draw.ellipse(canvas, (98, 112, 136), (nacelle_x, nacelle_y, nacelle_w, nacelle_h))
+            pygame.draw.ellipse(canvas, (145, 168, 195), (nacelle_x + size * 0.10 * gear_scale, nacelle_y + size * 0.04 * gear_scale, nacelle_w * 0.45, nacelle_h * 0.25))
+            intake_cx = nacelle_x + nacelle_w + size * 0.03 * gear_scale
+            intake_cy = nacelle_y + nacelle_h * 0.5
+            intake_r = size * 0.12 * gear_scale
+            pygame.draw.circle(canvas, (168, 184, 206), (int(intake_cx), int(intake_cy)), int(intake_r))
+            pygame.draw.circle(canvas, (70, 78, 94), (int(intake_cx), int(intake_cy)), int(intake_r * 0.58))
+            exhaust = [
+                (nacelle_x - size * 0.20 * gear_scale, nacelle_y + nacelle_h * 0.35),
+                (nacelle_x, nacelle_y + nacelle_h * 0.12),
+                (nacelle_x, nacelle_y + nacelle_h * 0.88),
+                (nacelle_x - size * 0.20 * gear_scale, nacelle_y + nacelle_h * 0.65),
+            ]
+            pygame.draw.polygon(canvas, (82, 95, 118), exhaust)
+            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.02 * gear_scale, cy + size * 0.08 * gear_scale), (nacelle_x + size * 0.34 * gear_scale, nacelle_y + nacelle_h * 0.3), 2)
+            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.02 * gear_scale, cy + size * 0.24 * gear_scale), (nacelle_x + size * 0.34 * gear_scale, nacelle_y + nacelle_h * 0.7), 2)
+            nozzle_pos = (nacelle_x - size * 0.20 * gear_scale, nacelle_y + nacelle_h * 0.5)
 
         elif gear == "balloon":
             # Thin green pod aligned parallel to penguin body, with rear exhaust for forward thrust.
@@ -852,17 +1043,35 @@ class Game:
             pod_y = cy - size * 0.18 * gear_scale
             pod_w = size * 1.22 * gear_scale
             pod_h = size * 0.24 * gear_scale
-            pygame.draw.ellipse(canvas, (90, 210, 110), (pod_x, pod_y, pod_w, pod_h))
-            pygame.draw.ellipse(canvas, (160, 235, 170), (pod_x + size * 0.08 * gear_scale, pod_y + size * 0.04 * gear_scale, pod_w * 0.45, pod_h * 0.35))
+            pygame.draw.ellipse(canvas, (100, 220, 120), (pod_x, pod_y, pod_w, pod_h))
+            # Balloon highlight
+            pygame.draw.ellipse(canvas, (180, 245, 190), (pod_x + size * 0.08 * gear_scale, pod_y + size * 0.04 * gear_scale, pod_w * 0.45, pod_h * 0.35))
+            # Balloon shadow
+            pygame.draw.ellipse(canvas, (70, 180, 90), (pod_x - 1, pod_y + 1, pod_w - 2, pod_h - 2), 2)
             # Mount struts to body.
-            pygame.draw.line(canvas, (120, 120, 120), (cx - size * 0.08 * gear_scale, cy + size * 0.04 * gear_scale), (cx - size * 0.32 * gear_scale, cy - size * 0.02 * gear_scale), 2)
-            pygame.draw.line(canvas, (120, 120, 120), (cx - size * 0.08 * gear_scale, cy + size * 0.24 * gear_scale), (cx - size * 0.32 * gear_scale, cy + size * 0.12 * gear_scale), 2)
-            # Rear nozzle + flame (left side), indicating forward propulsion.
-            pygame.draw.rect(canvas, (110, 110, 120), (pod_x - size * 0.08 * gear_scale, pod_y + size * 0.07 * gear_scale, size * 0.09 * gear_scale, size * 0.1 * gear_scale), border_radius=2)
-            pygame.draw.polygon(canvas, (255, 170, 70), [
-                (pod_x - size * 0.1 * gear_scale, pod_y + size * 0.12 * gear_scale),
-                (pod_x - size * 0.32 * gear_scale, pod_y + size * 0.08 * gear_scale),
-                (pod_x - size * 0.32 * gear_scale, pod_y + size * 0.16 * gear_scale),
+            pygame.draw.line(canvas, (140, 140, 150), (cx - size * 0.08 * gear_scale, cy + size * 0.04 * gear_scale), (cx - size * 0.32 * gear_scale, cy - size * 0.02 * gear_scale), 2)
+            pygame.draw.line(canvas, (140, 140, 150), (cx - size * 0.08 * gear_scale, cy + size * 0.24 * gear_scale), (cx - size * 0.32 * gear_scale, cy + size * 0.12 * gear_scale), 2)
+            # Rear nozzle (left side), indicating forward propulsion.
+            pygame.draw.rect(canvas, (130, 130, 145), (pod_x - size * 0.08 * gear_scale, pod_y + size * 0.07 * gear_scale, size * 0.09 * gear_scale, size * 0.1 * gear_scale), border_radius=2)
+            # Nozzle highlight
+            pygame.draw.rect(canvas, (160, 160, 175), (pod_x - size * 0.076 * gear_scale, pod_y + size * 0.075 * gear_scale, size * 0.06 * gear_scale, size * 0.06 * gear_scale), border_radius=1)
+            nozzle_pos = (pod_x - size * 0.08 * gear_scale, pod_y + size * 0.12 * gear_scale)
+
+        # Exhaust flame only while the engine is actively producing thrust.
+        if nozzle_pos is not None and player.is_thrusting:
+            flicker = (pygame.time.get_ticks() // 40) % 5
+            flame_len = size * gear_scale * (0.18 + 0.05 * flicker)
+            flame_half = size * gear_scale * 0.06
+            nx, ny = nozzle_pos
+            pygame.draw.polygon(canvas, (255, 140, 60), [
+                (nx, ny),
+                (nx - flame_len, ny - flame_half),
+                (nx - flame_len, ny + flame_half),
+            ])
+            pygame.draw.polygon(canvas, (255, 215, 120), [
+                (nx - size * gear_scale * 0.03, ny),
+                (nx - flame_len * 0.58, ny - flame_half * 0.52),
+                (nx - flame_len * 0.58, ny + flame_half * 0.52),
             ])
 
         rotated_overlay = pygame.transform.rotozoom(canvas, angle, 1.0)

@@ -32,6 +32,7 @@ DEFAULT_GROUND_FRICTION = 0.995
 FLAT_ICE_SLOPE_THRESHOLD = 0.12
 FLAT_ICE_FRICTION = 0.99985
 ZERO_FRICTION_SLOPE_THRESHOLD = 0.08
+RAMP_GRAVITY_ALONG_SLOPE_MULT = 0.45
 
 # Game States
 STATE_MENU = "menu"
@@ -42,11 +43,14 @@ STATE_RESULTS = "results"
 STATE_PAUSED = "paused"
 
 # Colors
-COLOR_SKY = (135, 206, 235)
-COLOR_GROUND = (139, 69, 19)
-COLOR_SNOW = (255, 255, 255)
-COLOR_TEXT = (255, 255, 255)
-COLOR_DARK = (20, 20, 20)
+COLOR_SKY = (200, 230, 255)
+COLOR_SKY_DARK = (100, 180, 240)
+COLOR_GROUND = (120, 100, 80)
+COLOR_SNOW = (248, 250, 252)
+COLOR_ICE = (200, 235, 255)
+COLOR_TEXT = (245, 245, 250)
+COLOR_DARK = (25, 30, 40)
+COLOR_ACCENT = (255, 140, 60)
 
 # Gear Categories
 SLED_TIERS = {
@@ -74,5 +78,12 @@ RAMP_HEIGHT_TIERS = [
     {"name": "Raised Ramp", "launch_gap_m": 4.0, "cost": 350},
     {"name": "Tall Ramp", "launch_gap_m": 5.0, "cost": 900},
     {"name": "High Ramp", "launch_gap_m": 6.5, "cost": 1700},
+]
+
+RAMP_DROP_TIERS = [
+    {"name": "Shallow Drop", "extra_drop_m": 0.0, "cost": 0},
+    {"name": "Deeper Drop", "extra_drop_m": 0.5, "cost": 450},
+    {"name": "Steep Drop", "extra_drop_m": 1.0, "cost": 1100},
+    {"name": "Extreme Drop", "extra_drop_m": 1.6, "cost": 2100},
 ]
 

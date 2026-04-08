@@ -5,10 +5,11 @@ from src.constants import *
 
 
 class Terrain:
-    def __init__(self, width, height, ramp_height_level=0):
+    def __init__(self, width, height, ramp_height_level=0, ramp_drop_level=0):
         self.width = width
         self.height = height
         self.ramp_height_level = max(0, min(int(ramp_height_level), len(RAMP_HEIGHT_TIERS) - 1))
+        self.ramp_drop_level = max(0, min(int(ramp_drop_level), len(RAMP_DROP_TIERS) - 1))
         self.points = []
         self.ramps = []  # List of ramp segments
         self.generate_terrain()
@@ -24,16 +25,17 @@ class Terrain:
         self.ramps = []
         start_y = self.height - 520
         launch_gap_m = RAMP_HEIGHT_TIERS[self.ramp_height_level]["launch_gap_m"]
+        extra_drop_px = RAMP_DROP_TIERS[self.ramp_drop_level]["extra_drop_m"] * PIXELS_PER_METER
 
         # Launch section only at the beginning.
-        # Profile: almost-flat top -> steep down -> short flat -> ~30deg launch up -> cliff.
+        # Ramp-drop upgrade raises only the start section; launch piece/lip anchors remain fixed.
         launch_anchors = [
-            (0, start_y),
-            (180, start_y + 5),
-            (360, start_y + 185),
-            (460, start_y + 190),
-            (580, start_y + 135),
-            (690, start_y + 72),
+            (0, start_y - extra_drop_px),
+            (360, start_y + 8 - extra_drop_px),      # Longer near-flat entry
+            (760, start_y + 360),                     # Steeper and deeper downhill
+            (980, start_y + 365),                     # Short center settle section
+            (1260, start_y + 170),                    # Recovery climb toward launch
+            (1320, start_y + 135),                    # Much shorter ~30 deg launch exit
         ]
 
         launch_points = self._build_smooth_ramp_points(launch_anchors, samples_per_segment=24)
@@ -45,20 +47,18 @@ class Terrain:
         snow_y = lowest_ramp_y + (launch_gap_m * PIXELS_PER_METER)
         self.points.extend(launch_points)
 
-        # Tiny snow shelf right after the launch lip, then a near-vertical drop to snow.
-        shelf_end_x = 702
-        shelf_y = launch_off_y
-        self.points.append((shelf_end_x, shelf_y))
+        # Immediate near-vertical drop right from the launch lip.
+        lip_x = launch_anchors[-1][0]
 
         # Snow starts immediately after the drop (no horizontal air gap).
-        snow_step_x = shelf_end_x + 2
+        snow_step_x = lip_x + 2
         flat_y = snow_y
         self.points.append((snow_step_x, flat_y))
         self.points.append((self.width, flat_y))
 
         # Surface zones for physics + rendering.
-        self.ice_end_x = shelf_end_x
-        self.shelf_snow_end_x = shelf_end_x
+        self.ice_end_x = lip_x
+        self.shelf_snow_end_x = lip_x
         self.snow_start_x = snow_step_x
 
         # Record steep segments as ramps.
@@ -279,8 +279,13 @@ class Hazard:
 
 
 class Environment:
-    def __init__(self, ramp_height_level=0):
-        self.terrain = Terrain(PIXELS_PER_METER * WORLD_LENGTH_M, SCREEN_HEIGHT, ramp_height_level=ramp_height_level)
+    def __init__(self, ramp_height_level=0, ramp_drop_level=0):
+        self.terrain = Terrain(
+            PIXELS_PER_METER * WORLD_LENGTH_M,
+            SCREEN_HEIGHT,
+            ramp_height_level=ramp_height_level,
+            ramp_drop_level=ramp_drop_level,
+        )
         self.hazards = []
         self.collectibles = []
         self.spawn_hazards()
