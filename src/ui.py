@@ -1,6 +1,7 @@
 import math
 import pygame
 from src.constants import *
+from src.rendering.player_graphics import draw_catalog_icon, draw_player_shop_preview
 
 
 class Button:
@@ -303,57 +304,6 @@ class UIManager:
         for button in buttons:
             button.draw(surface, self.font_medium)
     
-    def _draw_catalog_icon(self, surface, category, key, rect):
-        """Draw a compact item icon for the catalog page."""
-        pygame.draw.rect(surface, (36, 52, 72), rect, border_radius=8)
-        pygame.draw.rect(surface, (110, 150, 200), rect, 1, border_radius=8)
-        cx = rect.x + rect.width // 2
-        cy = rect.y + rect.height // 2
-
-        if category == "sled":
-            color = {
-                "the_plank": (155, 105, 58),
-                "plank_mk2": (142, 90, 48),
-                "good_ol_sled": (120, 72, 35),
-                "bobsled": (70, 102, 145),
-            }.get(key, (130, 95, 60))
-            pygame.draw.ellipse(surface, color, (rect.x + 8, cy - 10, rect.width - 16, 16))
-            pygame.draw.line(surface, (210, 220, 230), (rect.x + 12, cy - 6), (rect.x + rect.width - 12, cy - 6), 2)
-        elif category == "glider":
-            wing_color = (75, 205, 110) if key == "kite" else ((90, 130, 170) if key == "old_glider" else (85, 145, 195))
-            pygame.draw.polygon(surface, wing_color, [
-                (rect.x + 10, cy + 5),
-                (rect.x + rect.width - 12, cy - 6),
-                (rect.x + rect.width - 18, cy + 10),
-                (rect.x + 14, cy + 14),
-            ])
-            pygame.draw.line(surface, (150, 160, 175), (cx - 4, rect.y + 14), (cx - 4, rect.y + rect.height - 10), 2)
-        elif category == "booster":
-            if key == "sugar_rocket":
-                pygame.draw.rect(surface, (205, 212, 225), (rect.x + 16, cy - 8, rect.width - 36, 16), border_radius=5)
-                pygame.draw.polygon(surface, (205, 85, 85), [(rect.x + rect.width - 20, cy), (rect.x + rect.width - 8, cy - 6), (rect.x + rect.width - 8, cy + 6)])
-            elif key == "pulse_jet":
-                pygame.draw.rect(surface, (110, 118, 132), (rect.x + 10, cy - 5, rect.width - 20, 10), border_radius=3)
-                pygame.draw.ellipse(surface, (128, 136, 152), (rect.x + rect.width - 20, cy - 9, 18, 18))
-            else:
-                pygame.draw.ellipse(surface, (98, 112, 136), (rect.x + 10, cy - 9, rect.width - 20, 18))
-                pygame.draw.circle(surface, (170, 185, 205), (rect.x + rect.width - 12, cy), 7)
-        elif category == "payload":
-            if key in ("sand", "iron_pellets", "cast_iron", "osmium"):
-                base = {
-                    "sand": (218, 198, 135),
-                    "iron_pellets": (152, 156, 164),
-                    "cast_iron": (114, 118, 126),
-                    "osmium": (88, 104, 132),
-                }.get(key, (150, 150, 150))
-                pygame.draw.rect(surface, base, (rect.x + 20, cy - 12, rect.width - 40, 24), border_radius=6)
-                pygame.draw.rect(surface, (228, 232, 236), (rect.x + 24, cy - 9, rect.width - 52, 8), border_radius=3)
-            else:
-                body = (170, 75, 60) if key == "dyna_might" else ((130, 145, 122) if key == "c4" else (130, 180, 95))
-                pygame.draw.rect(surface, body, (rect.x + 22, cy - 11, rect.width - 44, 22), border_radius=5)
-                pygame.draw.circle(surface, (245, 206, 90), (rect.x + rect.width - 20, cy), 6)
-                pygame.draw.line(surface, (245, 206, 90), (rect.x + rect.width - 20, cy), (rect.x + rect.width - 9, cy - 9), 2)
-
     def draw_upgrade_screen(self, surface, player, game_data, top_buttons, box_buttons, catalog_category, catalog_items, catalog_buttons, close_button):
         """Draw revamped gear shop with category boxes and catalog modal."""
         target_open = 1.0 if catalog_category else 0.0
@@ -446,6 +396,8 @@ class UIManager:
             else:
                 self.draw_text(surface, "Crash damage gear", self.font_small, (195, 210, 238), rect.x + 16, rect.y + 82)
 
+        draw_player_shop_preview(surface, player, pygame.Rect(840, 86, 330, 128))
+
         # Catalog modal
         if self.catalog_open_t > 0.01 and catalog_category:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -494,7 +446,7 @@ class UIManager:
                 surface.blit(shine, (row_rect.x + 2, row_rect.y + 2))
 
                 icon_rect = pygame.Rect(row_rect.x + 10, row_rect.y + 6, 110, row_h - 12)
-                self._draw_catalog_icon(surface, catalog_category, key, icon_rect)
+                draw_catalog_icon(surface, catalog_category, key, icon_rect)
 
                 name = item["name"]
                 price = item["cost"]

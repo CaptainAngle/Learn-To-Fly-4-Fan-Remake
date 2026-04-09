@@ -1,11 +1,17 @@
 import math
-import random
 import pygame
 from src.constants import *
 from src.player import Player
 from src.environment import Environment
 from src.save_system import SaveSystem
 from src.ui import UIManager, Button
+from src.gameplay.terrain_math import get_terrain_slope_at_x, project_velocity_to_slope
+from src.gameplay.earnings import compute_flight_earnings
+from src.gameplay.fuel import apply_fuel_capacity_upgrade
+from src.gameplay import shop as shop_helpers
+from src.rendering import flight_effects as flight_fx
+from src.rendering.world import draw_terrain_with_camera as draw_world_with_camera
+from src.rendering.player_graphics import draw_player_with_camera as draw_player_actor_with_camera
 
 
 class Game:
@@ -313,170 +319,40 @@ class Game:
     
     def try_purchase_gear(self, category, gear_name):
         """Try to purchase or equip categorized gear."""
-        if category == "sled":
-            gear_info = SLED_TIERS.get(gear_name)
-            unlock_key = "unlocked_sleds"
-            equip_key = "equipped_sled"
-            equip_fn = self.player.equip_sled
-        elif category == "glider":
-            gear_info = GLIDER_TIERS.get(gear_name)
-            unlock_key = "unlocked_gliders"
-            equip_key = "equipped_glider"
-            equip_fn = self.player.equip_glider
-        elif category == "booster":
-            gear_info = BOOSTER_TIERS.get(gear_name)
-            unlock_key = "unlocked_boosters"
-            equip_key = "equipped_booster"
-            equip_fn = self.player.equip_booster
-        elif category == "payload":
-            gear_info = PAYLOAD_TIERS.get(gear_name)
-            unlock_key = "unlocked_payloads"
-            equip_key = "equipped_payload"
-            equip_fn = self.player.equip_payload
-        else:
-            return
-
-        if not gear_info:
-            return
-
-        if gear_name in self.game_data[unlock_key]:
-            equip_fn(gear_name)
-            if category == "booster":
-                self._apply_fuel_capacity_upgrade()
-            self.game_data[equip_key] = gear_name
-            self.save_game()
-            self.set_toast(f"Equipped {gear_info['name']}", (120, 210, 150), duration=1.8)
-        else:
-            if self.player.coins >= gear_info["cost"]:
-                self.player.coins -= gear_info["cost"]
-                self.game_data[unlock_key].append(gear_name)
-                equip_fn(gear_name)
-                if category == "booster":
-                    self._apply_fuel_capacity_upgrade()
-                self.game_data[equip_key] = gear_name
-                self.save_game()
-                self.set_toast(f"Purchased {gear_info['name']}", (120, 210, 150), duration=2.1)
-            else:
-                need = gear_info["cost"] - self.player.coins
-                self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
+        shop_helpers.try_purchase_gear(self, category, gear_name)
 
     def _apply_fuel_capacity_upgrade(self):
         """Apply current fuel upgrade multiplier to equipped booster capacity."""
-        if self.player is None or self.player.booster not in BOOSTER_TIERS:
-            return
-        fuel_level = max(0, min(int(self.game_data.get("fuel_level", 0)), len(FUEL_CAPACITY_TIERS) - 1))
-        fuel_mult = float(FUEL_CAPACITY_TIERS[fuel_level]["fuel_mult"])
-        base_fuel = float(BOOSTER_TIERS[self.player.booster]["fuel"])
-        upgraded_max = base_fuel * fuel_mult
-        self.player.max_fuel = upgraded_max
-        # Refill to upgraded capacity so fuel upgrades affect actual starting fuel.
-        self.player.fuel = self.player.max_fuel
+        apply_fuel_capacity_upgrade(self.player, self.game_data, refill=True)
 
     def try_purchase_ramp_height(self):
         """Advance the launch ramp height upgrade."""
-        current_level = int(self.game_data.get("ramp_height_level", 0))
-        next_level = current_level + 1
-        if next_level >= len(RAMP_HEIGHT_TIERS):
-            return
-
-        next_tier = RAMP_HEIGHT_TIERS[next_level]
-        if self.player.coins >= next_tier["cost"]:
-            self.player.coins -= next_tier["cost"]
-            self.game_data["ramp_height_level"] = next_level
-            self.save_game()
-            self.set_toast(f"Ramp Height upgraded to Lv {next_level + 1}", (120, 210, 150), duration=2.0)
-        else:
-            need = next_tier["cost"] - self.player.coins
-            self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
+        shop_helpers.try_purchase_ramp_height(self)
 
     def try_purchase_ramp_drop(self):
         """Advance the downhill ramp depth upgrade."""
-        current_level = int(self.game_data.get("ramp_drop_level", 0))
-        next_level = current_level + 1
-        if next_level >= len(RAMP_DROP_TIERS):
-            return
-
-        next_tier = RAMP_DROP_TIERS[next_level]
-        if self.player.coins >= next_tier["cost"]:
-            self.player.coins -= next_tier["cost"]
-            self.game_data["ramp_drop_level"] = next_level
-            self.save_game()
-            self.set_toast(f"Ramp Length upgraded to Lv {next_level + 1}", (120, 210, 150), duration=2.0)
-        else:
-            need = next_tier["cost"] - self.player.coins
-            self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
+        shop_helpers.try_purchase_ramp_drop(self)
 
     def try_purchase_fuel_capacity(self):
         """Advance the fuel capacity upgrade."""
-        current_level = int(self.game_data.get("fuel_level", 0))
-        next_level = current_level + 1
-        if next_level >= len(FUEL_CAPACITY_TIERS):
-            return
-
-        next_tier = FUEL_CAPACITY_TIERS[next_level]
-        if self.player.coins >= next_tier["cost"]:
-            self.player.coins -= next_tier["cost"]
-            self.game_data["fuel_level"] = next_level
-            self._apply_fuel_capacity_upgrade()
-            self.save_game()
-            self.set_toast(f"Fuel upgraded to Lv {next_level + 1}", (120, 210, 150), duration=2.0)
-        else:
-            need = next_tier["cost"] - self.player.coins
-            self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
+        shop_helpers.try_purchase_fuel_capacity(self)
 
     def get_catalog_entries(self, category):
         """Return ordered gear tuples for the selected shop catalog."""
-        if category == "sled":
-            return list(SLED_TIERS.items())
-        if category == "glider":
-            return list(GLIDER_TIERS.items())
-        if category == "booster":
-            return list(BOOSTER_TIERS.items())
-        if category == "payload":
-            return list(PAYLOAD_TIERS.items())
-        return []
+        return shop_helpers.get_catalog_entries(category)
 
     def _get_terrain_slope_at_x(self, x):
         """Return terrain slope under a world x position."""
-        points = self.environment.terrain.points
-        for i in range(len(points) - 1):
-            x1, y1 = points[i]
-            x2, y2 = points[i + 1]
-            if x1 <= x <= x2:
-                dx = (x2 - x1)
-                return ((y2 - y1) / dx) if dx != 0 else 0.0
-        return 0.0
+        return get_terrain_slope_at_x(self.environment.terrain.points, x)
 
     def _project_velocity_to_slope(self, slope, preserve_ratio=0.0):
         """Resolve ground contact by removing inward normal velocity and keeping tangent motion."""
-        vx0 = self.player.vx
-        vy0 = self.player.vy
-        norm = math.sqrt(1.0 + slope * slope)
-        tx = 1.0 / norm
-        ty = slope / norm
-
-        # Inward normal (toward ground in screen-space y-down coordinates).
-        nx = -slope / norm
-        ny = 1.0 / norm
-        vn_inward = (vx0 * nx) + (vy0 * ny)
-        if vn_inward > 0.0:
-            vx0 -= vn_inward * nx
-            vy0 -= vn_inward * ny
-
-        tangential_speed = (vx0 * tx) + (vy0 * ty)
-
-        if preserve_ratio > 0.0:
-            # Preserve some pre-impact speed through sharp kink transitions on ice.
-            preserve_speed = math.hypot(self.player.vx, self.player.vy) * preserve_ratio
-            if abs(tangential_speed) < preserve_speed:
-                # Do not force a direction when nearly stopped.
-                if tangential_speed > 1e-6:
-                    tangential_speed = preserve_speed
-                elif tangential_speed < -1e-6:
-                    tangential_speed = -preserve_speed
-
-        self.player.vx = tx * tangential_speed
-        self.player.vy = ty * tangential_speed
+        self.player.vx, self.player.vy = project_velocity_to_slope(
+            self.player.vx,
+            self.player.vy,
+            slope,
+            preserve_ratio=preserve_ratio,
+        )
 
     def _resolve_obstacle_hits(self, controls, dt):
         """Handle impact-only obstacle hits: speed converts to damage and is fully consumed."""
@@ -578,25 +454,30 @@ class Game:
     def _finalize_day(self):
         """Compute earnings from flight stats and transition to result screen."""
         self.flight_distance = self.player.distance_traveled
-        distance_money = self.flight_distance * EARNING_K_DISTANCE
-        speed_money = self.flight_max_speed_mps * EARNING_L_MAX_SPEED
-        altitude_money = self.flight_max_altitude_m * EARNING_M_MAX_ALTITUDE
-        duration_money = self.flight_duration_s * EARNING_N_DURATION
-        destruction_money = self.flight_destruction_points * EARNING_O_DESTRUCTION
-
-        total = int(distance_money + speed_money + altitude_money + duration_money + destruction_money)
-        self.flight_coins_earned = max(0, total)
+        earnings = compute_flight_earnings(
+            distance=self.flight_distance,
+            max_speed=self.flight_max_speed_mps,
+            max_altitude=self.flight_max_altitude_m,
+            duration=self.flight_duration_s,
+            destruction=self.flight_destruction_points,
+            k_distance=EARNING_K_DISTANCE,
+            l_speed=EARNING_L_MAX_SPEED,
+            m_altitude=EARNING_M_MAX_ALTITUDE,
+            n_duration=EARNING_N_DURATION,
+            o_destruction=EARNING_O_DESTRUCTION,
+        )
+        self.flight_coins_earned = earnings["total"]
         self.flight_breakdown = {
             "distance": self.flight_distance,
             "max_speed": self.flight_max_speed_mps,
             "max_altitude": self.flight_max_altitude_m,
             "duration": self.flight_duration_s,
             "destruction": self.flight_destruction_points,
-            "distance_money": int(distance_money),
-            "speed_money": int(speed_money),
-            "altitude_money": int(altitude_money),
-            "duration_money": int(duration_money),
-            "destruction_money": int(destruction_money),
+            "distance_money": earnings["distance_money"],
+            "speed_money": earnings["speed_money"],
+            "altitude_money": earnings["altitude_money"],
+            "duration_money": earnings["duration_money"],
+            "destruction_money": earnings["destruction_money"],
         }
 
         self.player.coins += self.flight_coins_earned
@@ -773,7 +654,7 @@ class Game:
             altitude_m = max(0.0, (terrain_y_now - (self.player.y + self.player.size)) / PIXELS_PER_METER)
             self.flight_max_altitude_m = max(self.flight_max_altitude_m, altitude_m)
 
-            self._update_flight_visuals(dt, speed_mps, controls)
+            flight_fx.update_flight_visuals(self, dt, speed_mps, controls)
 
             # End the day if the penguin has effectively stopped.
             explosion_sequence_active = (
@@ -836,13 +717,13 @@ class Game:
         
         elif self.state == STATE_PLAYING:
             # Draw game with camera offset
-            self.draw_flight_background(self.screen)
+            flight_fx.draw_flight_background(self, self.screen)
             
             # Draw game elements with camera offset applied
-            self.draw_terrain_with_camera(self.screen)
-            self.draw_motion_effects_with_camera(self.screen)
+            draw_world_with_camera(self, self.screen)
+            flight_fx.draw_motion_effects_with_camera(self, self.screen)
             if not self.player_exploding:
-                self.draw_player_with_camera(self.screen)
+                draw_player_actor_with_camera(self, self.screen)
             self.draw_player_explosion_with_camera(self.screen)
             
             self.ui_manager.draw_stats(self.screen, self.player, self.environment)
@@ -887,432 +768,6 @@ class Game:
         
         pygame.quit()
 
-    def _update_flight_visuals(self, dt, speed_mps, controls):
-        """Update non-gameplay visual effects for flight readability and feel."""
-        # Fade old trail points.
-        for p in self.player_trail:
-            p["life"] -= dt
-        self.player_trail = [p for p in self.player_trail if p["life"] > 0.0]
-
-        # Spawn contrail points at higher speeds.
-        if (not self.player_exploding) and speed_mps >= TRAIL_SPAWN_SPEED_MPS:
-            spawn_rate = 16.0 + (speed_mps - TRAIL_SPAWN_SPEED_MPS) * 0.45
-            self._trail_spawn_accum += dt * spawn_rate
-            while self._trail_spawn_accum >= 1.0:
-                self._trail_spawn_accum -= 1.0
-                self.player_trail.append({
-                    "x": self.player.x - self.player.vx * random.uniform(0.8, 1.3),
-                    "y": self.player.y + self.player.size * random.uniform(0.15, 0.55),
-                    "life": TRAIL_POINT_LIFE_S,
-                    "max": TRAIL_POINT_LIFE_S,
-                })
-
-        # Update boost particles (world-space).
-        for bp in self.boost_particles:
-            bp["life"] -= dt
-            bp["x"] += bp["vx"] * dt
-            bp["y"] += bp["vy"] * dt
-            bp["vy"] += 26.0 * dt
-        self.boost_particles = [bp for bp in self.boost_particles if bp["life"] > 0.0]
-
-        if (not self.player_exploding) and self.player.is_thrusting:
-            burst = 1 if random.random() < 0.45 else 2
-            for _ in range(burst):
-                self.boost_particles.append({
-                    "x": self.player.x - self.player.size * random.uniform(0.35, 0.65),
-                    "y": self.player.y + self.player.size * random.uniform(0.10, 0.45),
-                    "vx": -random.uniform(60.0, 150.0),
-                    "vy": random.uniform(-40.0, 40.0),
-                    "life": BOOST_PARTICLE_LIFE_S,
-                    "max": BOOST_PARTICLE_LIFE_S,
-                })
-
-        # Update speed lines (screen-space parallax style).
-        for sl in self.speed_lines:
-            sl["x"] += sl["vx"] * dt
-            sl["life"] -= dt
-        self.speed_lines = [sl for sl in self.speed_lines if sl["life"] > 0.0 and sl["x"] > -120]
-
-        if speed_mps >= SPEED_LINE_SPAWN_SPEED_MPS:
-            density = (speed_mps - SPEED_LINE_SPAWN_SPEED_MPS) * 0.22
-            self._speed_line_spawn_accum += dt * density
-            while self._speed_line_spawn_accum >= 1.0:
-                self._speed_line_spawn_accum -= 1.0
-                self.speed_lines.append({
-                    "x": SCREEN_WIDTH + random.uniform(20, 160),
-                    "y": random.uniform(30, SCREEN_HEIGHT - 140),
-                    "len": random.uniform(18, 68),
-                    "vx": -random.uniform(220.0, 520.0),
-                    "life": random.uniform(0.28, 0.62),
-                    "max": 0.62,
-                })
-
-    def draw_flight_background(self, surface):
-        """Draw animated sky, sun glow, and parallax atmosphere."""
-        # Animated gradient with subtle hue drift.
-        t = self.render_time_s
-        for y in range(SCREEN_HEIGHT):
-            ratio = y / max(1, SCREEN_HEIGHT - 1)
-            wave = math.sin(t * 0.35 + ratio * 4.2) * 6.0
-            r = int(max(0, min(255, COLOR_SKY[0] + (COLOR_SKY_DARK[0] - COLOR_SKY[0]) * ratio + wave * 0.35)))
-            g = int(max(0, min(255, COLOR_SKY[1] + (COLOR_SKY_DARK[1] - COLOR_SKY[1]) * ratio + wave * 0.45)))
-            b = int(max(0, min(255, COLOR_SKY[2] + (COLOR_SKY_DARK[2] - COLOR_SKY[2]) * ratio + wave * 0.6)))
-            pygame.draw.line(surface, (r, g, b), (0, y), (SCREEN_WIDTH, y))
-
-        # Sun + halo.
-        sun_x = int(SCREEN_WIDTH * 0.83)
-        sun_y = int(104 + math.sin(t * 0.25) * 7)
-        for radius, alpha in ((120, 36), (88, 52), (58, 84)):
-            halo = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
-            pygame.draw.circle(halo, (255, 240, 185, alpha), (radius + 2, radius + 2), radius)
-            surface.blit(halo, (sun_x - radius - 2, sun_y - radius - 2))
-        pygame.draw.circle(surface, (255, 247, 208), (sun_x, sun_y), 34)
-
-        # Far parallax mountain silhouettes.
-        cam = self.camera_x
-        bands = [
-            {"speed": 0.10, "y": SCREEN_HEIGHT * 0.56, "amp": 22, "color": (132, 170, 206)},
-            {"speed": 0.18, "y": SCREEN_HEIGHT * 0.63, "amp": 30, "color": (112, 150, 188)},
-        ]
-        for band in bands:
-            pts = []
-            step = 70
-            for sx in range(-step, SCREEN_WIDTH + step * 2, step):
-                wx = sx + cam * band["speed"]
-                y = band["y"] + math.sin(wx * 0.0065 + t * 0.14) * band["amp"] + math.sin(wx * 0.0125) * (band["amp"] * 0.35)
-                pts.append((sx, int(y)))
-            pts.append((SCREEN_WIDTH + step * 2, SCREEN_HEIGHT))
-            pts.append((-step, SCREEN_HEIGHT))
-            pygame.draw.polygon(surface, band["color"], pts)
-
-        # Speed lines overlay (behind terrain/player but above sky).
-        for sl in self.speed_lines:
-            life_k = max(0.0, min(1.0, sl["life"] / max(1e-5, sl["max"])))
-            alpha = int(120 * life_k)
-            col = (230, 240, 255, alpha)
-            streak = pygame.Surface((int(sl["len"]) + 3, 3), pygame.SRCALPHA)
-            pygame.draw.line(streak, col, (0, 1), (int(sl["len"]), 1), 2)
-            surface.blit(streak, (sl["x"], sl["y"]))
-
-    def draw_motion_effects_with_camera(self, surface):
-        """Draw world-space trail and boost effects with camera offset."""
-        off_x = self.camera_x
-        off_y = self.camera_y
-
-        # Contrail dots.
-        for p in self.player_trail:
-            life_k = max(0.0, min(1.0, p["life"] / max(1e-5, p["max"])))
-            r = max(1, int(5 * life_k))
-            alpha = int(150 * life_k)
-            x = int(p["x"] - off_x)
-            y = int(p["y"] - off_y)
-            blob = pygame.Surface((r * 4 + 2, r * 4 + 2), pygame.SRCALPHA)
-            pygame.draw.circle(blob, (212, 232, 252, alpha), (r * 2 + 1, r * 2 + 1), r * 2)
-            surface.blit(blob, (x - (r * 2 + 1), y - (r * 2 + 1)))
-
-        # Engine particles.
-        for bp in self.boost_particles:
-            life_k = max(0.0, min(1.0, bp["life"] / max(1e-5, bp["max"])))
-            x = int(bp["x"] - off_x)
-            y = int(bp["y"] - off_y)
-            size = max(1, int(5 * life_k))
-            pygame.draw.circle(surface, (255, 172, 92), (x, y), size)
-            if life_k > 0.45:
-                pygame.draw.circle(surface, (255, 232, 175), (x, y), max(1, size - 1))
-    
-    def draw_terrain_with_camera(self, surface):
-        """Draw terrain with camera offset applied."""
-        terrain = self.environment.terrain
-        offset = self.camera_x
-        offset_y = self.camera_y
-
-        # Draw clouds as terrain-anchored world objects behind the ground.
-        for cloud in terrain.clouds:
-            cx = cloud["x"] - offset * 0.95
-            cloud_world_y = terrain.get_ground_y_at(cloud["x"]) - cloud["terrain_gap"]
-            cy = cloud_world_y - offset_y
-            s = cloud["s"]
-            if -120 < cx < SCREEN_WIDTH + 120:
-                # Cloud shadow for depth
-                pygame.draw.circle(surface, (220, 225, 235), (int(cx + 1), int(cy + 1)), int(s * 1.05))
-                # Main cloud
-                pygame.draw.circle(surface, (250, 251, 255), (int(cx), int(cy)), s)
-                pygame.draw.circle(surface, (250, 251, 255), (int(cx + s * 0.9), int(cy + s * 0.05)), int(s * 1.05))
-                pygame.draw.circle(surface, (250, 251, 255), (int(cx - s * 0.8), int(cy + s * 0.05)), int(s * 0.85))
-                # Cloud highlight
-                pygame.draw.circle(surface, (255, 255, 255), (int(cx + s * 0.2), int(cy - s * 0.35)), int(s * 0.95))
-        
-        # Draw terrain base polygon (snow shadow)
-        if len(terrain.points) > 1:
-            terrain_points = [(x - offset, y - offset_y) for x, y in terrain.points]
-            terrain_points.append((self.environment.terrain.width - offset, SCREEN_HEIGHT * 2))
-            terrain_points.append((0 - offset, SCREEN_HEIGHT * 2))
-            
-            pygame.draw.polygon(surface, (200, 215, 235), terrain_points)
-
-        # Draw top surface by material.
-        for i in range(len(terrain.points) - 1):
-            x1, y1 = terrain.points[i]
-            x2, y2 = terrain.points[i + 1]
-            mid_x = (x1 + x2) * 0.5
-            mat = terrain.get_surface_type_at(mid_x)
-            if mat == "ice":
-                top_color = (150, 210, 250)
-                edge_color = (210, 240, 255)
-                width = 6
-            elif mat == "snow":
-                top_color = (250, 251, 255)
-                edge_color = (240, 245, 255)
-                width = 8
-            else:
-                continue
-
-            pygame.draw.line(surface, top_color, (x1 - offset, y1 - offset_y), (x2 - offset, y2 - offset_y), width)
-            pygame.draw.line(surface, edge_color, (x1 - offset, y1 - offset_y), (x2 - offset, y2 - offset_y), 2)
-            # Shadow line below surface for depth
-            pygame.draw.line(surface, (200, 220, 240), (x1 - offset, y1 - offset_y + 2), (x2 - offset, y2 - offset_y + 2), 1)
-
-            # Texture marks anchored to world coordinates so ground motion is visible.
-            seg_len = max(1.0, ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5)
-            mark_step = 22 if mat == "snow" else 22
-            mark_count = int(seg_len // mark_step)
-            for j in range(mark_count + 1):
-                t = 0 if mark_count == 0 else j / max(1, mark_count)
-                mx = x1 + (x2 - x1) * t
-                my = y1 + (y2 - y1) * t
-
-                if mat == "snow":
-                    # Deterministic pseudo-random variation by world position.
-                    seed = int(mx * 0.37 + my * 1.91 + j * 13 + i * 101)
-                    rand_a = ((seed * 1103515245 + 12345) & 0x7FFFFFFF) / 0x7FFFFFFF
-                    rand_b = (((seed + 77) * 1103515245 + 12345) & 0x7FFFFFFF) / 0x7FFFFFFF
-                    rand_c = (((seed + 173) * 1103515245 + 12345) & 0x7FFFFFFF) / 0x7FFFFFFF
-
-                    # Draw downward streaks into the snow body, not just at the border.
-                    jitter_x = -4 + int(rand_c * 9)
-                    start_x = mx - offset + jitter_x
-                    start_y = my - offset_y + 2 + int(rand_a * 3)
-
-                    depth = 14 + int(rand_b * 34)
-                    drift = -2 + int(rand_a * 5)
-
-                    end_x = start_x + drift
-                    end_y = start_y + depth
-
-                    color = (218, 226, 236) if rand_b > 0.5 else (230, 236, 244)
-                    pygame.draw.line(surface, color, (start_x, start_y), (end_x, end_y), 1)
-
-                    # Occasional secondary streak for a more natural random pattern.
-                    if rand_c > 0.62:
-                        sx2 = start_x + 2
-                        sy2 = start_y + 3
-                        ex2 = sx2 + max(-1, drift - 1)
-                        ey2 = sy2 + max(8, depth - 8)
-                        pygame.draw.line(surface, (235, 240, 247), (sx2, sy2), (ex2, ey2), 1)
-                else:  # ice
-                    pygame.draw.line(
-                        surface,
-                        (170, 225, 245),
-                        (mx - offset - 3, my - offset_y - 1),
-                        (mx - offset + 3, my - offset_y + 1),
-                        1,
-                    )
-                    # Additional subtle marks for ice texture
-                    seed = int(mx * 0.37 + my * 1.91 + j * 13 + i * 101)
-                    rand_d = ((seed * 1103515245 + 12345) & 0x7FFFFFFF) / 0x7FFFFFFF
-                    if rand_d > 0.7:
-                        pygame.draw.line(surface, (190, 235, 252), (mx - offset, my - offset_y - 2), (mx - offset + 1, my - offset_y + 2), 1)
-        
-        # Draw terrain outline
-        for i in range(len(terrain.points) - 1):
-            x1, y1 = terrain.points[i]
-            x2, y2 = terrain.points[i + 1]
-            pygame.draw.line(surface, (150, 165, 185), (x1 - offset, y1 - offset_y), (x2 - offset, y2 - offset_y), 2)
-        
-        # Subtle ice sheen on launch ramp.
-        for i in range(len(terrain.points) - 1):
-            x1, y1 = terrain.points[i]
-            x2, y2 = terrain.points[i + 1]
-            mid_x = (x1 + x2) * 0.5
-            if terrain.get_surface_type_at(mid_x) == "ice":
-                pygame.draw.line(surface, (190, 235, 255), (x1 - offset, y1 - offset_y - 4), (x2 - offset, y2 - offset_y - 4), 1)
-        
-        # Draw wind particles
-        for p in terrain.wind_particles:
-            if -50 < p["x"] - offset < SCREEN_WIDTH + 50:
-                size = max(1, int(2 * (p["life"] / 30)))
-                # Wind particles with gradient effect
-                alpha = int(100 * (p["life"] / 30))
-                color = (200, 220, 240)
-                pygame.draw.circle(surface, color, (int(p["x"] - offset), int(p["y"] - offset_y)), size)
-        
-        # Draw hazards with camera offset
-        for hazard in self.environment.hazards:
-            if hazard.destroyed:
-                continue
-            hazard_screen_x = hazard.x - offset
-            hazard_screen_y = hazard.y - offset_y
-            if -180 < hazard_screen_x < SCREEN_WIDTH + 180:  # Only draw if visible
-                if hazard.type == "snowman":
-                    body_r = max(16, int(hazard.height * 0.24))
-                    head_r = max(12, int(hazard.height * 0.17))
-                    body_y = int(hazard_screen_y - body_r)
-                    head_y = int(body_y - body_r - head_r + 8)
-                    pygame.draw.circle(surface, (250, 252, 255), (int(hazard_screen_x), body_y), body_r)
-                    pygame.draw.circle(surface, (250, 252, 255), (int(hazard_screen_x), head_y), head_r)
-                    pygame.draw.circle(surface, (35, 40, 45), (int(hazard_screen_x - head_r * 0.3), int(head_y - head_r * 0.25)), max(2, head_r // 6))
-                    pygame.draw.circle(surface, (35, 40, 45), (int(hazard_screen_x + head_r * 0.3), int(head_y - head_r * 0.25)), max(2, head_r // 6))
-                    pygame.draw.polygon(surface, (255, 140, 30), [
-                        (hazard_screen_x + 1, head_y - 1),
-                        (hazard_screen_x + head_r, head_y + 1),
-                        (hazard_screen_x + 1, head_y + 3),
-                    ])
-                elif hazard.type == "snowmound":
-                    pygame.draw.ellipse(surface, (235, 242, 252), (hazard_screen_x - 42, hazard_screen_y - 38, 84, 40))
-                    pygame.draw.ellipse(surface, (222, 232, 244), (hazard_screen_x - 36, hazard_screen_y - 28, 72, 24))
-                elif hazard.type == "rocky_hill":
-                    pygame.draw.polygon(surface, (120, 125, 132), [
-                        (hazard_screen_x - 56, hazard_screen_y),
-                        (hazard_screen_x - 24, hazard_screen_y - 48),
-                        (hazard_screen_x + 8, hazard_screen_y - 62),
-                        (hazard_screen_x + 56, hazard_screen_y),
-                    ])
-                    pygame.draw.line(surface, (148, 156, 168), (hazard_screen_x - 16, hazard_screen_y - 32), (hazard_screen_x + 24, hazard_screen_y - 12), 2)
-                elif hazard.type == "iceberg":
-                    pygame.draw.polygon(surface, (170, 220, 250), [
-                        (hazard_screen_x - 66, hazard_screen_y),
-                        (hazard_screen_x - 38, hazard_screen_y - 78),
-                        (hazard_screen_x + 8, hazard_screen_y - 108),
-                        (hazard_screen_x + 62, hazard_screen_y - 56),
-                        (hazard_screen_x + 76, hazard_screen_y),
-                    ])
-                    pygame.draw.polygon(surface, (210, 242, 255), [
-                        (hazard_screen_x - 20, hazard_screen_y - 64),
-                        (hazard_screen_x + 10, hazard_screen_y - 92),
-                        (hazard_screen_x + 34, hazard_screen_y - 58),
-                    ])
-                elif hazard.type == "glacier_wall":
-                    pygame.draw.rect(surface, (150, 195, 235), (hazard_screen_x - 84, hazard_screen_y - 220, 168, 220), border_radius=6)
-                    pygame.draw.rect(surface, (200, 236, 255), (hazard_screen_x - 72, hazard_screen_y - 212, 48, 204), border_radius=4)
-                    pygame.draw.rect(surface, (182, 224, 248), (hazard_screen_x - 14, hazard_screen_y - 212, 42, 204), border_radius=4)
-                    pygame.draw.rect(surface, (205, 240, 255), (hazard_screen_x + 34, hazard_screen_y - 212, 40, 204), border_radius=4)
-
-                # HP bar + label
-                bar_w = max(44, int(hazard.width * 0.9))
-                bar_x = int(hazard_screen_x - bar_w * 0.5)
-                bar_y = int(hazard_screen_y - hazard.height - 24)
-                hp_ratio = max(0.0, min(1.0, hazard.hp / max(1.0, hazard.max_hp)))
-                pygame.draw.rect(surface, (40, 45, 55), (bar_x, bar_y, bar_w, 7), border_radius=3)
-                pygame.draw.rect(surface, (255, 125, 95), (bar_x, bar_y, int(bar_w * hp_ratio), 7), border_radius=3)
-                pygame.draw.rect(surface, (235, 235, 240), (bar_x, bar_y, bar_w, 7), 1, border_radius=3)
-                label = self.ui_manager.font_small.render(hazard.name, True, (235, 242, 250))
-                surface.blit(label, (bar_x, bar_y - 16))
-    
-    def draw_player_with_camera(self, surface):
-        """Draw player with camera offset applied."""
-        offset = self.camera_x
-        offset_y = self.camera_y
-        size = int(self.player.size * 1.5)
-        player_screen_x = self.player.x - offset
-        player_screen_y = self.player.y - offset_y
-
-        if -size * 2 < player_screen_x < SCREEN_WIDTH + size * 2:
-            sprite = pygame.Surface((size * 4, size * 3), pygame.SRCALPHA)
-            cx = int(size * 2)
-            cy = int(size * 1.5)
-
-            # Belly-sliding penguin: half-ellipse cut on the MINOR diameter (vertical cut).
-            body_left = size * (2.0 - 3.45 * 0.5)
-            body_top = size * (1.5 - 1.50 * 0.5)
-            body_w = size * 3.45
-            body_h = size * 1.50
-            cx_body = body_left + body_w * 0.50
-            cy_body = body_top + body_h * 0.50
-            rx = body_w * 0.50
-            ry = body_h * 0.50
-
-            # Right half of ellipse, with flat vertical back edge at x = cx_body.
-            half_body = [(cx_body, cy_body - ry)]
-            samples = 22
-            for i in range(samples + 1):
-                theta = -math.pi / 2 + (math.pi * i / samples)
-                x = cx_body + rx * math.cos(theta)
-                y = cy_body + ry * math.sin(theta)
-                half_body.append((x, y))
-            half_body.append((cx_body, cy_body + ry))
-            pygame.draw.polygon(sprite, (30, 35, 45), half_body)
-            # Dark shading on the back
-            pygame.draw.polygon(sprite, (15, 18, 25), [(cx_body - size * 0.05, cy_body - ry), (cx_body, cy_body - ry), (cx_body, cy_body + ry), (cx_body - size * 0.05, cy_body + ry)])
-
-            # White belly patch in the lower-front part.
-            belly_left = cx_body + size * 0.42
-            belly_top = cy_body + size * 0.02
-            belly_w = size * 1.25
-            belly_h = size * 0.62
-            pygame.draw.ellipse(sprite, (245, 248, 250), (belly_left, belly_top, belly_w, belly_h))
-            # Subtle belly shading
-            pygame.draw.ellipse(sprite, (225, 235, 242), (belly_left + size * 0.08, belly_top + size * 0.15, belly_w - size * 0.16, belly_h * 0.5))
-
-            # Side beak at front.
-            pygame.draw.polygon(sprite, (255, 150, 0), [
-                (cx_body + rx * 0.97, cy_body - size * 0.08),
-                (cx_body + rx * 1.36, cy_body),
-                (cx_body + rx * 0.97, cy_body + size * 0.09),
-            ])
-            pygame.draw.polygon(sprite, (200, 110, 0), [
-                (cx_body + rx * 0.97, cy_body - size * 0.08),
-                (cx_body + rx * 1.15, cy_body - size * 0.02),
-                (cx_body + rx * 0.97, cy_body + size * 0.03),
-            ])
-
-            # Eye near front/top.
-            eye_x = int(cx_body + rx * 0.60)
-            eye_y = int(cy_body - ry * 0.30)
-            pygame.draw.circle(sprite, (255, 255, 255), (eye_x, eye_y), int(size * 0.12))
-            pygame.draw.circle(sprite, (10, 10, 20), (eye_x + int(size * 0.03), eye_y - int(size * 0.02)), int(size * 0.06))
-            pygame.draw.circle(sprite, (255, 255, 255), (eye_x + int(size * 0.05), eye_y - int(size * 0.03)), int(size * 0.02))
-
-            # Feet under body for sliding silhouette.
-            feet_w = size * 0.52
-            feet_h = size * 0.20
-
-            # Original centers before rotation (right foot is pivot).
-            right_center_x = cx_body - size * 0.17
-            # Move feet up by about 50% of penguin height.
-            right_center_y = cy_body + ry - size * 0.70
-            left_center_x = cx_body - size * 0.57
-            left_center_y = cy_body + ry - size * 0.67
-
-            # Rotate left foot around right foot by 90 deg clockwise.
-            dx = left_center_x - right_center_x
-            dy = left_center_y - right_center_y
-            left_rot_x = right_center_x + dy
-            left_rot_y = right_center_y - dx
-
-            pygame.draw.ellipse(sprite, (255, 165, 0), (right_center_x - feet_w / 2, right_center_y - feet_h / 2, feet_w, feet_h))
-            pygame.draw.ellipse(sprite, (255, 165, 0), (left_rot_x - feet_w / 2, left_rot_y - feet_h / 2, feet_w, feet_h))
-
-            rotated = pygame.transform.rotozoom(sprite, self.player.angle, 1.0)
-            rect = rotated.get_rect(center=(player_screen_x, player_screen_y))
-            surface.blit(rotated, rect)
-            self.draw_equipment_overlay(surface, player_screen_x, player_screen_y, size, self.player, self.player.angle)
-            
-            # Fuel bar
-            if self.player.fuel > 0:
-                bar_width = 25
-                bar_height = 5
-                bar_x = player_screen_x - bar_width // 2
-                bar_y = player_screen_y - size - 15
-                
-                pygame.draw.rect(surface, (100, 100, 100), (bar_x, bar_y, bar_width, bar_height))
-                
-                fuel_width = int(bar_width * (self.player.fuel / self.player.max_fuel))
-                fuel_color = (int(255 * (1 - self.player.fuel / self.player.max_fuel)), 
-                            int(255 * (self.player.fuel / self.player.max_fuel)), 0)
-                pygame.draw.rect(surface, fuel_color, (bar_x, bar_y, fuel_width, bar_height))
-                
-                pygame.draw.rect(surface, (200, 200, 200), (bar_x, bar_y, bar_width, bar_height), 1)
-
     def draw_player_explosion_with_camera(self, surface):
         """Draw the delayed payload detonation blast around the player."""
         if not self.player_exploding:
@@ -1348,268 +803,20 @@ class Game:
             y2 = cy + int(math.sin(ang) * r2)
             pygame.draw.line(blast, (255, 230, 170, max(80, alpha)), (x1, y1), (x2, y2), 2)
 
+        # Expanding shock rings.
+        ring_alpha = max(0, int(180 * (1.0 - progress)))
+        for rk in (0.55, 0.9, 1.22):
+            rr = max(4, int(base_radius * rk))
+            pygame.draw.circle(blast, (255, 210, 150, ring_alpha // 2), (cx, cy), rr, 2)
+
+        # Ember dots.
+        ember_count = 12
+        for i in range(ember_count):
+            ang = (i / float(ember_count)) * math.tau + progress * 3.0
+            er = int(base_radius * (0.65 + 0.55 * ((i % 3) / 2.0)))
+            ex2 = cx + int(math.cos(ang) * er)
+            ey2 = cy + int(math.sin(ang) * er)
+            pygame.draw.circle(blast, (255, 170, 90, max(40, ring_alpha)), (ex2, ey2), 2)
+
         surface.blit(blast, (ex - cx, ey - cy))
-
-    def draw_equipment_overlay(self, surface, px, py, size, player, angle):
-        """Draw oversized equipment overlay attached to penguin."""
-        gear_scale = 3.5
-        canvas = pygame.Surface((size * 24, size * 24), pygame.SRCALPHA)
-        cx = size * 12
-        cy = size * 12
-
-        # Sled layer (only while attached on ramp).
-        if player.sled_attached:
-            sled_color = {
-                "the_plank": (160, 110, 60),
-                "plank_mk2": (145, 95, 50),
-                "good_ol_sled": (130, 75, 35),
-                "bobsled": (65, 100, 145),
-            }[player.sled]
-            pygame.draw.ellipse(
-                canvas,
-                sled_color,
-                (cx - size * 0.7 * gear_scale, cy + size * 0.72 * gear_scale, size * 1.55 * gear_scale, size * 0.28 * gear_scale),
-            )
-            # Sled shading/highlight
-            pygame.draw.ellipse(
-                canvas,
-                tuple(min(c + 40, 255) for c in sled_color),
-                (cx - size * 0.68 * gear_scale, cy + size * 0.73 * gear_scale, size * 1.40 * gear_scale, size * 0.08 * gear_scale),
-            )
-
-        # Glider layer.
-        if player.glider == "kite":
-            # Skinny green parallelogram directly on top of the penguin.
-            mast_base = (cx - size * 0.02 * gear_scale, cy + size * 0.02 * gear_scale)
-            mast_top = (cx - size * 0.02 * gear_scale, cy - size * 0.24 * gear_scale)
-            pygame.draw.line(canvas, (120, 120, 120), mast_base, mast_top, 2)
-
-            kite_x = mast_top[0]
-            kite_y = mast_top[1] - size * 0.02 * gear_scale
-            kite_w = size * 0.70 * gear_scale
-            kite_h = size * 0.10 * gear_scale
-            slant = size * 0.16 * gear_scale
-
-            pygame.draw.polygon(canvas, (70, 200, 95), [
-                (kite_x - kite_w * 0.5 + slant, kite_y - kite_h * 0.5),
-                (kite_x + kite_w * 0.5 + slant, kite_y - kite_h * 0.5),
-                (kite_x + kite_w * 0.5 - slant, kite_y + kite_h * 0.5),
-                (kite_x - kite_w * 0.5 - slant, kite_y + kite_h * 0.5),
-            ])
-            # Kite shading
-            pygame.draw.polygon(canvas, (90, 220, 115), [
-                (kite_x - kite_w * 0.4 + slant, kite_y - kite_h * 0.3),
-                (kite_x + kite_w * 0.3 + slant, kite_y - kite_h * 0.3),
-                (kite_x + kite_w * 0.25 - slant, kite_y + kite_h * 0.2),
-                (kite_x - kite_w * 0.35 - slant, kite_y + kite_h * 0.2),
-            ])
-            pygame.draw.line(
-                canvas,
-                (160, 245, 175),
-                (kite_x - kite_w * 0.45 + slant, kite_y - kite_h * 0.18),
-                (kite_x + kite_w * 0.45 + slant, kite_y - kite_h * 0.18),
-                2,
-            )
-
-        elif player.glider in ("old_glider", "hand_glider"):
-            if player.glider == "old_glider":
-                wing_len = 0.95
-                wing_thickness = 0.10
-                mast_h = 0.62
-                color_main = (85, 120, 160)
-                color_highlight = (180, 220, 255)
-                color_shadow = (60, 85, 120)
-            else:  # hand_glider
-                wing_len = 1.20
-                wing_thickness = 0.11
-                mast_h = 0.68
-                color_main = (80, 130, 180)
-                color_highlight = (200, 235, 255)
-                color_shadow = (50, 75, 110)
-
-            # Back-mounted anchor (penguin faces right, so back is left side).
-            mast_base = (cx - size * 0.12 * gear_scale, cy + size * 0.05 * gear_scale)
-            mast_top = (cx - size * 0.18 * gear_scale, cy - size * (mast_h - 0.28) * gear_scale)
-
-            # Strap/mast from penguin to glider.
-            pygame.draw.line(canvas, (125, 125, 125), mast_base, mast_top, 2)
-
-            # Thin side-view wing profile above penguin.
-            wing_x = mast_top[0]
-            wing_y = mast_top[1] + size * 0.18 * gear_scale
-            # Wing shadow for depth
-            pygame.draw.polygon(canvas, color_shadow, [
-                (wing_x + size * 0.14 * gear_scale, wing_y - size * wing_thickness * gear_scale + 1),
-                (wing_x - size * wing_len * gear_scale + 1, wing_y - size * (wing_thickness * 0.55) * gear_scale + 1),
-                (wing_x - size * (wing_len - 0.18) * gear_scale, wing_y + size * wing_thickness * gear_scale + 1),
-                (wing_x + size * 0.1 * gear_scale, wing_y + size * (wing_thickness * 0.7) * gear_scale + 1),
-            ])
-            pygame.draw.polygon(canvas, color_main, [
-                (wing_x + size * 0.12 * gear_scale, wing_y - size * wing_thickness * gear_scale),
-                (wing_x - size * wing_len * gear_scale, wing_y - size * (wing_thickness * 0.55) * gear_scale),
-                (wing_x - size * (wing_len - 0.18) * gear_scale, wing_y + size * wing_thickness * gear_scale),
-                (wing_x + size * 0.08 * gear_scale, wing_y + size * (wing_thickness * 0.7) * gear_scale),
-            ])
-            pygame.draw.line(
-                canvas,
-                color_highlight,
-                (wing_x + size * 0.08 * gear_scale, wing_y - size * (wing_thickness * 0.2) * gear_scale),
-                (wing_x - size * (wing_len - 0.15) * gear_scale, wing_y - size * (wing_thickness * 0.05) * gear_scale),
-                2,
-            )
-            # Small rear support strap to keep the glider looking strapped on.
-            pygame.draw.line(
-                canvas,
-                (125, 125, 125),
-                (cx + size * 0.14 * gear_scale, cy + size * 0.10 * gear_scale),
-                (wing_x + size * 0.03 * gear_scale, wing_y + size * 0.02 * gear_scale),
-                1,
-            )
-
-        # Payload layer.
-        payload_key = player.payload
-        if payload_key in PAYLOAD_TIERS:
-            pstats = PAYLOAD_TIERS[payload_key]
-            ptype = pstats.get("payload_type")
-            if ptype == "regular":
-                fill = {
-                    "sand": (218, 196, 130),
-                    "iron_pellets": (150, 156, 165),
-                    "cast_iron": (112, 117, 125),
-                    "osmium": (84, 102, 130),
-                }.get(payload_key, (145, 145, 145))
-                pack_x = cx - size * 0.58 * gear_scale
-                pack_y = cy + size * 0.18 * gear_scale
-                pack_w = size * 0.46 * gear_scale
-                pack_h = size * 0.34 * gear_scale
-                pygame.draw.rect(canvas, fill, (pack_x, pack_y, pack_w, pack_h), border_radius=4)
-                pygame.draw.rect(canvas, (238, 240, 245), (pack_x + size * 0.04 * gear_scale, pack_y + size * 0.04 * gear_scale, pack_w * 0.5, pack_h * 0.24), border_radius=3)
-                pygame.draw.line(canvas, (112, 118, 128), (pack_x + pack_w, pack_y + size * 0.06 * gear_scale), (cx - size * 0.02 * gear_scale, cy + size * 0.08 * gear_scale), 2)
-                pygame.draw.line(canvas, (112, 118, 128), (pack_x + pack_w, pack_y + pack_h - size * 0.06 * gear_scale), (cx - size * 0.02 * gear_scale, cy + size * 0.22 * gear_scale), 2)
-            else:
-                body = (170, 75, 60) if payload_key == "dyna_might" else ((130, 145, 122) if payload_key == "c4" else (132, 185, 100))
-                pack_x = cx - size * 0.62 * gear_scale
-                pack_y = cy + size * 0.16 * gear_scale
-                pack_w = size * 0.52 * gear_scale
-                pack_h = size * 0.30 * gear_scale
-                pygame.draw.rect(canvas, body, (pack_x, pack_y, pack_w, pack_h), border_radius=4)
-                pygame.draw.circle(canvas, (245, 206, 90), (int(pack_x + pack_w - size * 0.02 * gear_scale), int(pack_y + pack_h * 0.5)), int(size * 0.05 * gear_scale))
-                pygame.draw.line(canvas, (245, 206, 90), (pack_x + pack_w - size * 0.02 * gear_scale, pack_y + pack_h * 0.5), (pack_x + pack_w + size * 0.08 * gear_scale, pack_y + pack_h * 0.2), 2)
-
-        # Booster layer.
-        gear = player.booster
-        nozzle_pos = None
-        if gear == "sugar_rocket":
-            # Side-mounted model rocket with pointed nose (front/right) and rear nozzle (left).
-            body_x = cx - size * 0.78 * gear_scale
-            body_y = cy - size * 0.02 * gear_scale
-            body_w = size * 0.86 * gear_scale
-            body_h = size * 0.22 * gear_scale
-            pygame.draw.rect(canvas, (205, 212, 225), (body_x, body_y, body_w, body_h), border_radius=5)
-            pygame.draw.rect(canvas, (235, 240, 250), (body_x + size * 0.08 * gear_scale, body_y + size * 0.03 * gear_scale, body_w * 0.58, body_h * 0.28), border_radius=3)
-            nose = [
-                (body_x + body_w, body_y + body_h * 0.5),
-                (body_x + body_w + size * 0.16 * gear_scale, body_y + body_h * 0.3),
-                (body_x + body_w + size * 0.16 * gear_scale, body_y + body_h * 0.7),
-            ]
-            pygame.draw.polygon(canvas, (210, 80, 80), nose)
-            fin_back = [
-                (body_x + size * 0.08 * gear_scale, body_y + body_h * 0.02),
-                (body_x - size * 0.09 * gear_scale, body_y - size * 0.07 * gear_scale),
-                (body_x + size * 0.12 * gear_scale, body_y + body_h * 0.36),
-            ]
-            fin_low = [
-                (body_x + size * 0.08 * gear_scale, body_y + body_h * 0.98),
-                (body_x - size * 0.09 * gear_scale, body_y + body_h + size * 0.07 * gear_scale),
-                (body_x + size * 0.12 * gear_scale, body_y + body_h * 0.64),
-            ]
-            pygame.draw.polygon(canvas, (185, 65, 65), fin_back)
-            pygame.draw.polygon(canvas, (185, 65, 65), fin_low)
-            pygame.draw.rect(canvas, (95, 100, 115), (body_x - size * 0.09 * gear_scale, body_y + body_h * 0.32, size * 0.1 * gear_scale, body_h * 0.36), border_radius=2)
-            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.08 * gear_scale, cy + size * 0.05 * gear_scale), (body_x + size * 0.18 * gear_scale, body_y + body_h * 0.25), 2)
-            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.08 * gear_scale, cy + size * 0.21 * gear_scale), (body_x + size * 0.18 * gear_scale, body_y + body_h * 0.75), 2)
-            nozzle_pos = (body_x - size * 0.09 * gear_scale, body_y + body_h * 0.5)
-
-        elif gear == "pulse_jet":
-            # Long skinny pulse jet with thicker intake/front section.
-            tube_x = cx - size * 1.02 * gear_scale
-            tube_y = cy + size * 0.03 * gear_scale
-            tube_w = size * 1.20 * gear_scale
-            tube_h = size * 0.13 * gear_scale
-            pygame.draw.rect(canvas, (105, 112, 126), (tube_x, tube_y, tube_w, tube_h), border_radius=3)
-            pygame.draw.rect(canvas, (145, 152, 168), (tube_x + size * 0.08 * gear_scale, tube_y + size * 0.02 * gear_scale, tube_w * 0.65, tube_h * 0.24), border_radius=2)
-            intake_x = tube_x + tube_w - size * 0.02 * gear_scale
-            intake_y = tube_y - size * 0.03 * gear_scale
-            intake_w = size * 0.28 * gear_scale
-            intake_h = size * 0.19 * gear_scale
-            pygame.draw.ellipse(canvas, (120, 128, 144), (intake_x, intake_y, intake_w, intake_h))
-            pygame.draw.ellipse(canvas, (82, 88, 102), (intake_x + size * 0.04 * gear_scale, intake_y + size * 0.03 * gear_scale, intake_w * 0.66, intake_h * 0.66))
-            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.04 * gear_scale, cy + size * 0.05 * gear_scale), (tube_x + size * 0.36 * gear_scale, tube_y + tube_h * 0.2), 2)
-            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.04 * gear_scale, cy + size * 0.22 * gear_scale), (tube_x + size * 0.36 * gear_scale, tube_y + tube_h * 0.8), 2)
-            nozzle_pos = (tube_x - size * 0.03 * gear_scale, tube_y + tube_h * 0.5)
-
-        elif gear == "ramjet":
-            # Airplane-style ramjet nacelle with intake lip and tapered exhaust.
-            nacelle_x = cx - size * 1.00 * gear_scale
-            nacelle_y = cy - size * 0.03 * gear_scale
-            nacelle_w = size * 1.08 * gear_scale
-            nacelle_h = size * 0.24 * gear_scale
-            pygame.draw.ellipse(canvas, (98, 112, 136), (nacelle_x, nacelle_y, nacelle_w, nacelle_h))
-            pygame.draw.ellipse(canvas, (145, 168, 195), (nacelle_x + size * 0.10 * gear_scale, nacelle_y + size * 0.04 * gear_scale, nacelle_w * 0.45, nacelle_h * 0.25))
-            intake_cx = nacelle_x + nacelle_w + size * 0.03 * gear_scale
-            intake_cy = nacelle_y + nacelle_h * 0.5
-            intake_r = size * 0.12 * gear_scale
-            pygame.draw.circle(canvas, (168, 184, 206), (int(intake_cx), int(intake_cy)), int(intake_r))
-            pygame.draw.circle(canvas, (70, 78, 94), (int(intake_cx), int(intake_cy)), int(intake_r * 0.58))
-            exhaust = [
-                (nacelle_x - size * 0.20 * gear_scale, nacelle_y + nacelle_h * 0.35),
-                (nacelle_x, nacelle_y + nacelle_h * 0.12),
-                (nacelle_x, nacelle_y + nacelle_h * 0.88),
-                (nacelle_x - size * 0.20 * gear_scale, nacelle_y + nacelle_h * 0.65),
-            ]
-            pygame.draw.polygon(canvas, (82, 95, 118), exhaust)
-            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.02 * gear_scale, cy + size * 0.08 * gear_scale), (nacelle_x + size * 0.34 * gear_scale, nacelle_y + nacelle_h * 0.3), 2)
-            pygame.draw.line(canvas, (95, 100, 110), (cx - size * 0.02 * gear_scale, cy + size * 0.24 * gear_scale), (nacelle_x + size * 0.34 * gear_scale, nacelle_y + nacelle_h * 0.7), 2)
-            nozzle_pos = (nacelle_x - size * 0.20 * gear_scale, nacelle_y + nacelle_h * 0.5)
-
-        elif gear == "balloon":
-            # Thin green pod aligned parallel to penguin body, with rear exhaust for forward thrust.
-            pod_x = cx - size * 1.05 * gear_scale
-            pod_y = cy - size * 0.18 * gear_scale
-            pod_w = size * 1.22 * gear_scale
-            pod_h = size * 0.24 * gear_scale
-            pygame.draw.ellipse(canvas, (100, 220, 120), (pod_x, pod_y, pod_w, pod_h))
-            # Balloon highlight
-            pygame.draw.ellipse(canvas, (180, 245, 190), (pod_x + size * 0.08 * gear_scale, pod_y + size * 0.04 * gear_scale, pod_w * 0.45, pod_h * 0.35))
-            # Balloon shadow
-            pygame.draw.ellipse(canvas, (70, 180, 90), (pod_x - 1, pod_y + 1, pod_w - 2, pod_h - 2), 2)
-            # Mount struts to body.
-            pygame.draw.line(canvas, (140, 140, 150), (cx - size * 0.08 * gear_scale, cy + size * 0.04 * gear_scale), (cx - size * 0.32 * gear_scale, cy - size * 0.02 * gear_scale), 2)
-            pygame.draw.line(canvas, (140, 140, 150), (cx - size * 0.08 * gear_scale, cy + size * 0.24 * gear_scale), (cx - size * 0.32 * gear_scale, cy + size * 0.12 * gear_scale), 2)
-            # Rear nozzle (left side), indicating forward propulsion.
-            pygame.draw.rect(canvas, (130, 130, 145), (pod_x - size * 0.08 * gear_scale, pod_y + size * 0.07 * gear_scale, size * 0.09 * gear_scale, size * 0.1 * gear_scale), border_radius=2)
-            # Nozzle highlight
-            pygame.draw.rect(canvas, (160, 160, 175), (pod_x - size * 0.076 * gear_scale, pod_y + size * 0.075 * gear_scale, size * 0.06 * gear_scale, size * 0.06 * gear_scale), border_radius=1)
-            nozzle_pos = (pod_x - size * 0.08 * gear_scale, pod_y + size * 0.12 * gear_scale)
-
-        # Exhaust flame only while the engine is actively producing thrust.
-        if nozzle_pos is not None and player.is_thrusting:
-            flicker = (pygame.time.get_ticks() // 40) % 5
-            flame_len = size * gear_scale * (0.18 + 0.05 * flicker)
-            flame_half = size * gear_scale * 0.06
-            nx, ny = nozzle_pos
-            pygame.draw.polygon(canvas, (255, 140, 60), [
-                (nx, ny),
-                (nx - flame_len, ny - flame_half),
-                (nx - flame_len, ny + flame_half),
-            ])
-            pygame.draw.polygon(canvas, (255, 215, 120), [
-                (nx - size * gear_scale * 0.03, ny),
-                (nx - flame_len * 0.58, ny - flame_half * 0.52),
-                (nx - flame_len * 0.58, ny + flame_half * 0.52),
-            ])
-
-        rotated_overlay = pygame.transform.rotozoom(canvas, angle, 1.0)
-        overlay_rect = rotated_overlay.get_rect(center=(px, py))
-        surface.blit(rotated_overlay, overlay_rect)
 

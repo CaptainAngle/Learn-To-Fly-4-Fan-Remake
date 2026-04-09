@@ -234,7 +234,7 @@ class Terrain:
         return self.height
     
     def draw(self, surface):
-        """Deprecated: Use game.draw_terrain_with_camera() instead."""
+        """Deprecated: Use src.rendering.world.draw_terrain_with_camera() instead."""
         pass
 
 
@@ -248,15 +248,15 @@ class Hazard:
         self.width = self.size * 2
         self.height = self.size * 2
         if self.type == "snowman":
-            self.width, self.height = 72, 140
+            self.width, self.height = 100, 180
         elif self.type == "snowmound":
-            self.width, self.height = 78, 44
+            self.width, self.height = 200, 360
         elif self.type == "rocky_hill":
-            self.width, self.height = 120, 68
+            self.width, self.height = 400, 720
         elif self.type == "iceberg":
-            self.width, self.height = 145, 108
+            self.width, self.height = 800, 1440
         elif self.type == "glacier_wall":
-            self.width, self.height = 170, 230
+            self.width, self.height = 1600, 2880
         self.max_hp = max(1.0, float(hp))
         self.hp = self.max_hp
         self.destruction_points = int(destruction_points)
