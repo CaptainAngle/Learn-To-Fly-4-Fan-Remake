@@ -369,7 +369,8 @@ class Game:
         base_fuel = float(BOOSTER_TIERS[self.player.booster]["fuel"])
         upgraded_max = base_fuel * fuel_mult
         self.player.max_fuel = upgraded_max
-        self.player.fuel = min(self.player.fuel, self.player.max_fuel) if self.player.fuel > 0 else self.player.max_fuel
+        # Refill to upgraded capacity so fuel upgrades affect actual starting fuel.
+        self.player.fuel = self.player.max_fuel
 
     def try_purchase_ramp_height(self):
         """Advance the launch ramp height upgrade."""
