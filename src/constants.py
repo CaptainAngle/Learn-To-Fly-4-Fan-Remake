@@ -91,6 +91,18 @@ BOOSTER_TIERS = {
     "ramjet": {"name": "Ramjet", "boost_mult": 1.70, "fuel": 150, "cost": 1900},
 }
 
+PAYLOAD_TIERS = {
+    # Regular payloads: strong speed-scaling impact damage.
+    "sand": {"name": "Sand", "payload_type": "regular", "impact_mult": 1.45, "impact_flat": 4.0, "explosion_damage": 0.0, "cost": 220},
+    "iron_pellets": {"name": "Iron Pellets", "payload_type": "regular", "impact_mult": 1.85, "impact_flat": 7.0, "explosion_damage": 0.0, "cost": 620},
+    "cast_iron": {"name": "Cast Iron", "payload_type": "regular", "impact_mult": 2.25, "impact_flat": 10.0, "explosion_damage": 0.0, "cost": 1180},
+    "osmium": {"name": "Osmium", "payload_type": "regular", "impact_mult": 2.75, "impact_flat": 14.0, "explosion_damage": 0.0, "cost": 2100},
+    # Explosive payloads: weaker impact hit, then bonus explosion if obstacle survives.
+    "dyna_might": {"name": "Dyna-MIGHT", "payload_type": "explosive", "impact_mult": 0.65, "impact_flat": 3.0, "explosion_damage": 26.0, "cost": 900},
+    "c4": {"name": "C4", "payload_type": "explosive", "impact_mult": 0.70, "impact_flat": 4.0, "explosion_damage": 48.0, "cost": 1750},
+    "nuclear_warhead": {"name": "Nuclear Warhead", "payload_type": "explosive", "impact_mult": 0.75, "impact_flat": 6.0, "explosion_damage": 95.0, "cost": 3900},
+}
+
 RAMP_HEIGHT_TIERS = [
     {"name": "Ramp Height Lv1", "launch_gap_m": 1.0, "cost": 0},
     {"name": "Ramp Height Lv2", "launch_gap_m": 1.4, "cost": 200},
@@ -116,4 +128,27 @@ RAMP_DROP_TIERS = [
     {"name": "Ramp Length Lv9", "extra_drop_m": 2.16, "cost": 3060},
     {"name": "Ramp Length Lv10", "extra_drop_m": 2.52, "cost": 3820},
 ]
+
+FUEL_CAPACITY_TIERS = [
+    {"name": "Fuel Lv1", "fuel_mult": 1.00, "cost": 0},
+    {"name": "Fuel Lv2", "fuel_mult": 1.12, "cost": 260},
+    {"name": "Fuel Lv3", "fuel_mult": 1.25, "cost": 520},
+    {"name": "Fuel Lv4", "fuel_mult": 1.39, "cost": 840},
+    {"name": "Fuel Lv5", "fuel_mult": 1.54, "cost": 1240},
+    {"name": "Fuel Lv6", "fuel_mult": 1.70, "cost": 1720},
+    {"name": "Fuel Lv7", "fuel_mult": 1.87, "cost": 2280},
+    {"name": "Fuel Lv8", "fuel_mult": 2.05, "cost": 2920},
+    {"name": "Fuel Lv9", "fuel_mult": 2.24, "cost": 3640},
+    {"name": "Fuel Lv10", "fuel_mult": 2.44, "cost": 4450},
+]
+
+# Visual tuning
+UI_EASE_SPEED = 8.0
+HUD_SPEED_MAX = 260.0
+HUD_ALT_MAX = 320.0
+CATALOG_ANIM_SPEED = 7.5
+TRAIL_POINT_LIFE_S = 0.65
+TRAIL_SPAWN_SPEED_MPS = 16.0
+SPEED_LINE_SPAWN_SPEED_MPS = 24.0
+BOOST_PARTICLE_LIFE_S = 0.28
 

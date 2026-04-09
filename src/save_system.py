@@ -28,12 +28,15 @@ class SaveSystem:
             "total_distance": 0,
             "ramp_height_level": 0,
             "ramp_drop_level": 0,
+            "fuel_level": 0,
             "unlocked_sleds": [],
             "unlocked_gliders": [],
             "unlocked_boosters": [],
+            "unlocked_payloads": [],
             "equipped_sled": None,
             "equipped_glider": None,
             "equipped_booster": None,
+            "equipped_payload": None,
             "best_flight_distance": 0,
         }
     
@@ -42,4 +45,3 @@ class SaveSystem:
         default_save = self.get_default_save()
         self.save_game(default_save)
         return default_save
-

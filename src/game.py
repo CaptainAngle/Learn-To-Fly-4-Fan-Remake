@@ -1,4 +1,5 @@
 import math
+import random
 import pygame
 from src.constants import *
 from src.player import Player
@@ -47,6 +48,7 @@ class Game:
         self.flight_max_altitude_m = 0.0
         self.flight_duration_s = 0.0
         self.flight_destruction_points = 0
+        self.obstacle_contacts = set()
         self.low_speed_frames = 0
         self.shop_catalog_category = None
         self.toast_text = ""
@@ -55,6 +57,22 @@ class Game:
         self.controls_hint_timer = 8.0
         self.was_ramp_locked = False
         self.ramp_detached_once = False
+        self.impact_stopped = False
+        self.pending_payload_explosion = None
+        self.payload_explosion_delay_s = 0.0
+        self.player_exploding = False
+        self.player_explosion_anim_s = 0.0
+        self.player_explosion_world = (0.0, 0.0)
+        self.post_explosion_end_delay_s = 1.0
+        self.post_explosion_wait_s = 0.0
+
+        # Flight visual state (render-only, no gameplay impact).
+        self.render_time_s = 0.0
+        self.player_trail = []
+        self.boost_particles = []
+        self.speed_lines = []
+        self._trail_spawn_accum = 0.0
+        self._speed_line_spawn_accum = 0.0
 
     def set_toast(self, text, color=(225, 235, 248), duration=2.0):
         """Show a short transient message for UX feedback."""
@@ -81,12 +99,19 @@ class Game:
             save_data["equipped_glider"] = None
         if "equipped_booster" not in save_data:
             save_data["equipped_booster"] = None
+        if "unlocked_payloads" not in save_data:
+            save_data["unlocked_payloads"] = []
+        if "equipped_payload" not in save_data:
+            save_data["equipped_payload"] = None
         if "ramp_height_level" not in save_data:
             save_data["ramp_height_level"] = 0
         save_data["ramp_height_level"] = max(0, min(int(save_data["ramp_height_level"]), len(RAMP_HEIGHT_TIERS) - 1))
         if "ramp_drop_level" not in save_data:
             save_data["ramp_drop_level"] = 0
         save_data["ramp_drop_level"] = max(0, min(int(save_data["ramp_drop_level"]), len(RAMP_DROP_TIERS) - 1))
+        if "fuel_level" not in save_data:
+            save_data["fuel_level"] = 0
+        save_data["fuel_level"] = max(0, min(int(save_data["fuel_level"]), len(FUEL_CAPACITY_TIERS) - 1))
 
         # Gear sanity: a tier can only be equipped if it is unlocked in the matching category.
         did_sanitize = False
@@ -99,6 +124,9 @@ class Game:
         if save_data.get("equipped_booster") not in save_data["unlocked_boosters"]:
             save_data["equipped_booster"] = None
             did_sanitize = True
+        if save_data.get("equipped_payload") not in save_data["unlocked_payloads"]:
+            save_data["equipped_payload"] = None
+            did_sanitize = True
 
         self.game_data = save_data
         if did_sanitize:
@@ -110,6 +138,8 @@ class Game:
         self.player.equip_sled(self.game_data["equipped_sled"])
         self.player.equip_glider(self.game_data["equipped_glider"])
         self.player.equip_booster(self.game_data["equipped_booster"])
+        self._apply_fuel_capacity_upgrade()
+        self.player.equip_payload(self.game_data["equipped_payload"])
     
     def save_game(self):
         """Save current game state."""
@@ -130,16 +160,17 @@ class Game:
             Button(50, SCREEN_HEIGHT - 80, 120, 60, "Back", (100, 100, 100)),
             Button(SCREEN_WIDTH - 190, 86, 150, 30, "Upgrade", (100, 150, 100)),
             Button(SCREEN_WIDTH - 190, 136, 150, 30, "Upgrade", (100, 150, 100)),
+            Button(SCREEN_WIDTH - 190, 186, 150, 30, "Upgrade", (100, 150, 100)),
         ]
         self.buttons["upgrade_boxes"] = {
             "sled": Button(120, 230, 420, 210, "Sled", (70, 110, 150)),
             "glider": Button(660, 230, 420, 210, "Glider", (70, 120, 165)),
             "booster": Button(120, 490, 420, 210, "Engine", (75, 115, 155)),
-            "future": Button(660, 490, 420, 210, "Reserved", (55, 65, 85)),
+            "payload": Button(660, 490, 420, 210, "Payload", (95, 95, 130)),
         }
         self.buttons["catalog_close"] = Button(910, 190, 160, 36, "Close", (120, 90, 90))
         self.buttons["catalog_items"] = [
-            Button(860, 255 + i * 92, 180, 38, "", (100, 150, 100)) for i in range(4)
+            Button(860, 255 + i * 92, 180, 38, "", (100, 150, 100)) for i in range(8)
         ]
         
         # Results screen buttons
@@ -168,13 +199,30 @@ class Game:
         self.flight_max_altitude_m = 0.0
         self.flight_duration_s = 0.0
         self.flight_destruction_points = 0
+        self.obstacle_contacts = set()
         self.low_speed_frames = 0
         self.was_ramp_locked = False
         self.ramp_detached_once = False
+        self.impact_stopped = False
+        self.pending_payload_explosion = None
+        self.payload_explosion_delay_s = 1.0
+        self.player_exploding = False
+        self.player_explosion_anim_s = 0.0
+        self.player_explosion_world = (0.0, 0.0)
+        self.post_explosion_wait_s = 0.0
+
+        # Reset flight visual state.
+        self.player_trail = []
+        self.boost_particles = []
+        self.speed_lines = []
+        self._trail_spawn_accum = 0.0
+        self._speed_line_spawn_accum = 0.0
         
         self.player.equip_sled(self.game_data["equipped_sled"])
         self.player.equip_glider(self.game_data["equipped_glider"])
         self.player.equip_booster(self.game_data["equipped_booster"])
+        self._apply_fuel_capacity_upgrade()
+        self.player.equip_payload(self.game_data["equipped_payload"])
         
         self.state = STATE_PLAYING
     
@@ -235,6 +283,8 @@ class Game:
                 self.try_purchase_ramp_height()
             if self.buttons["upgrade"][2].is_clicked(mouse_pos, True):
                 self.try_purchase_ramp_drop()
+            if self.buttons["upgrade"][3].is_clicked(mouse_pos, True):
+                self.try_purchase_fuel_capacity()
 
             if self.shop_catalog_category:
                 if self.buttons["catalog_close"].is_clicked(mouse_pos, True):
@@ -254,6 +304,8 @@ class Game:
                 self.shop_catalog_category = "glider"
             elif self.buttons["upgrade_boxes"]["booster"].is_clicked(mouse_pos, True):
                 self.shop_catalog_category = "booster"
+            elif self.buttons["upgrade_boxes"]["payload"].is_clicked(mouse_pos, True):
+                self.shop_catalog_category = "payload"
         
         elif self.state == STATE_RESULTS:
             if self.buttons["results"][0].is_clicked(mouse_pos, True):
@@ -276,6 +328,11 @@ class Game:
             unlock_key = "unlocked_boosters"
             equip_key = "equipped_booster"
             equip_fn = self.player.equip_booster
+        elif category == "payload":
+            gear_info = PAYLOAD_TIERS.get(gear_name)
+            unlock_key = "unlocked_payloads"
+            equip_key = "equipped_payload"
+            equip_fn = self.player.equip_payload
         else:
             return
 
@@ -284,6 +341,8 @@ class Game:
 
         if gear_name in self.game_data[unlock_key]:
             equip_fn(gear_name)
+            if category == "booster":
+                self._apply_fuel_capacity_upgrade()
             self.game_data[equip_key] = gear_name
             self.save_game()
             self.set_toast(f"Equipped {gear_info['name']}", (120, 210, 150), duration=1.8)
@@ -292,12 +351,25 @@ class Game:
                 self.player.coins -= gear_info["cost"]
                 self.game_data[unlock_key].append(gear_name)
                 equip_fn(gear_name)
+                if category == "booster":
+                    self._apply_fuel_capacity_upgrade()
                 self.game_data[equip_key] = gear_name
                 self.save_game()
                 self.set_toast(f"Purchased {gear_info['name']}", (120, 210, 150), duration=2.1)
             else:
                 need = gear_info["cost"] - self.player.coins
                 self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
+
+    def _apply_fuel_capacity_upgrade(self):
+        """Apply current fuel upgrade multiplier to equipped booster capacity."""
+        if self.player is None or self.player.booster not in BOOSTER_TIERS:
+            return
+        fuel_level = max(0, min(int(self.game_data.get("fuel_level", 0)), len(FUEL_CAPACITY_TIERS) - 1))
+        fuel_mult = float(FUEL_CAPACITY_TIERS[fuel_level]["fuel_mult"])
+        base_fuel = float(BOOSTER_TIERS[self.player.booster]["fuel"])
+        upgraded_max = base_fuel * fuel_mult
+        self.player.max_fuel = upgraded_max
+        self.player.fuel = min(self.player.fuel, self.player.max_fuel) if self.player.fuel > 0 else self.player.max_fuel
 
     def try_purchase_ramp_height(self):
         """Advance the launch ramp height upgrade."""
@@ -333,6 +405,24 @@ class Game:
             need = next_tier["cost"] - self.player.coins
             self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
 
+    def try_purchase_fuel_capacity(self):
+        """Advance the fuel capacity upgrade."""
+        current_level = int(self.game_data.get("fuel_level", 0))
+        next_level = current_level + 1
+        if next_level >= len(FUEL_CAPACITY_TIERS):
+            return
+
+        next_tier = FUEL_CAPACITY_TIERS[next_level]
+        if self.player.coins >= next_tier["cost"]:
+            self.player.coins -= next_tier["cost"]
+            self.game_data["fuel_level"] = next_level
+            self._apply_fuel_capacity_upgrade()
+            self.save_game()
+            self.set_toast(f"Fuel upgraded to Lv {next_level + 1}", (120, 210, 150), duration=2.0)
+        else:
+            need = next_tier["cost"] - self.player.coins
+            self.set_toast(f"Need {need}$ more", (235, 130, 120), duration=2.0)
+
     def get_catalog_entries(self, category):
         """Return ordered gear tuples for the selected shop catalog."""
         if category == "sled":
@@ -341,6 +431,8 @@ class Game:
             return list(GLIDER_TIERS.items())
         if category == "booster":
             return list(BOOSTER_TIERS.items())
+        if category == "payload":
+            return list(PAYLOAD_TIERS.items())
         return []
 
     def _get_terrain_slope_at_x(self, x):
@@ -386,22 +478,49 @@ class Game:
         self.player.vy = ty * tangential_speed
 
     def _resolve_obstacle_hits(self, controls, dt):
-        """Handle obstacle collision damage and destruction rewards during flight."""
+        """Handle impact-only obstacle hits: speed converts to damage and is fully consumed."""
         for obstacle in self.environment.hazards:
             if obstacle.destroyed or not obstacle.active:
-                continue
-            if not obstacle.check_collision(self.player):
+                self.obstacle_contacts.discard(id(obstacle))
                 continue
 
-            now_ms = pygame.time.get_ticks()
-            if now_ms - obstacle.last_hit_ms < 180:
+            obstacle_id = id(obstacle)
+            colliding = obstacle.check_collision(self.player)
+            if not colliding:
+                self.obstacle_contacts.discard(obstacle_id)
                 continue
-            obstacle.last_hit_ms = now_ms
+
+            # Only apply damage on initial impact frame, not while overlapping through the hitbox.
+            if obstacle_id in self.obstacle_contacts:
+                continue
+            self.obstacle_contacts.add(obstacle_id)
 
             speed_mps = math.hypot(self.player.vx, self.player.vy) * FPS / PIXELS_PER_METER
-            impact_damage = (speed_mps * 0.95) + (6.0 if controls.get("boost", False) else 0.0)
+            payload_stats = PAYLOAD_TIERS.get(self.player.payload)
+            if payload_stats:
+                impact_damage = (speed_mps * float(payload_stats.get("impact_mult", 1.0))) + float(payload_stats.get("impact_flat", 0.0))
+            else:
+                impact_damage = speed_mps
             if not obstacle.destroyed:
                 obstacle.hp -= impact_damage
+
+            should_schedule_payload_blast = False
+            if payload_stats and payload_stats.get("payload_type") == "explosive" and obstacle.hp > 0 and self.pending_payload_explosion is None:
+                bonus_damage = float(payload_stats.get("explosion_damage", 0.0))
+                if bonus_damage > 0.0:
+                    should_schedule_payload_blast = True
+                    self.pending_payload_explosion = {
+                        "obstacle": obstacle,
+                        "payload_name": payload_stats.get("name", "Payload"),
+                        "bonus_damage": bonus_damage,
+                    }
+                    self.payload_explosion_delay_s = 1.0
+                    self.set_toast(f"{payload_stats['name']} armed...", (255, 195, 135), duration=0.7)
+
+            # Impact consumes all speed regardless of outcome.
+            self.player.vx = 0.0
+            self.player.vy = 0.0
+            self.impact_stopped = True
 
             if obstacle.hp <= 0:
                 obstacle.destroyed = True
@@ -409,9 +528,51 @@ class Game:
                 self.flight_destruction_points += obstacle.destruction_points
                 self.set_toast(f"Destroyed: {obstacle.name}", (120, 220, 150), duration=1.6)
             else:
-                # Incomplete impact bleeds speed but does not hard-stop the run.
-                self.player.vx *= 0.82
-                self.player.vy *= 0.82
+                # If not destroyed, the penguin remains stopped after the impact.
+                if not should_schedule_payload_blast:
+                    self.set_toast(f"Hit {obstacle.name}", (240, 180, 120), duration=0.9)
+
+    def _trigger_player_explosion(self):
+        """Start a short explosion animation centered on the player."""
+        self.player_exploding = True
+        self.player_explosion_anim_s = 0.35
+        self.player_explosion_world = (self.player.x, self.player.y + self.player.size * 0.35)
+        self.post_explosion_wait_s = 0.0
+
+    def _process_payload_explosion_timers(self, dt):
+        """Resolve delayed explosive payload behavior and end the day after animation."""
+        if self.pending_payload_explosion is not None:
+            self.payload_explosion_delay_s = max(0.0, self.payload_explosion_delay_s - dt)
+            if self.payload_explosion_delay_s <= 0.0:
+                payload_name = self.pending_payload_explosion.get("payload_name", "Payload")
+                bonus_damage = float(self.pending_payload_explosion.get("bonus_damage", 0.0))
+                obstacle = self.pending_payload_explosion.get("obstacle")
+
+                if obstacle is not None and (not obstacle.destroyed) and obstacle.active:
+                    obstacle.hp -= bonus_damage
+                    if obstacle.hp <= 0:
+                        obstacle.destroyed = True
+                        obstacle.active = False
+                        self.flight_destruction_points += obstacle.destruction_points
+                        self.set_toast(f"{payload_name} exploded and destroyed {obstacle.name}", (120, 220, 150), duration=1.6)
+                    else:
+                        self.set_toast(f"{payload_name} detonated on {obstacle.name}", (255, 170, 120), duration=1.3)
+                else:
+                    self.set_toast(f"{payload_name} detonated", (255, 170, 120), duration=1.0)
+
+                self.pending_payload_explosion = None
+                self._trigger_player_explosion()
+
+        if self.player_exploding:
+            if self.player_explosion_anim_s > 0.0:
+                self.player_explosion_anim_s = max(0.0, self.player_explosion_anim_s - dt)
+            else:
+                # Small cinematic hold after the blast before transitioning to results.
+                self.post_explosion_wait_s += dt
+                if self.post_explosion_wait_s >= self.post_explosion_end_delay_s:
+                    self._finalize_day()
+                    return True
+        return False
 
     def _finalize_day(self):
         """Compute earnings from flight stats and transition to result screen."""
@@ -522,6 +683,11 @@ class Game:
                 dt=dt,
             )
 
+            # Keep speed pinned to zero forever after the first obstacle impact.
+            if self.impact_stopped:
+                self.player.vx = 0.0
+                self.player.vy = 0.0
+
             # Sweep along the frame motion to prevent tunneling through steep ramp segments.
             dx = self.player.x - prev_x
             dy = self.player.y - prev_y
@@ -592,23 +758,34 @@ class Game:
 
             self._resolve_obstacle_hits(controls, dt)
 
+            if self._process_payload_explosion_timers(dt):
+                return
+
             self.environment.update()
 
             speed = (self.player.vx ** 2 + self.player.vy ** 2) ** 0.5
             speed_mps = speed * FPS / PIXELS_PER_METER
             self.flight_max_speed_mps = max(self.flight_max_speed_mps, speed_mps)
+            self.render_time_s += dt
 
             terrain_y_now = self.environment.terrain.get_ground_y_at(self.player.x)
             altitude_m = max(0.0, (terrain_y_now - (self.player.y + self.player.size)) / PIXELS_PER_METER)
             self.flight_max_altitude_m = max(self.flight_max_altitude_m, altitude_m)
 
+            self._update_flight_visuals(dt, speed_mps, controls)
+
             # End the day if the penguin has effectively stopped.
-            if grounded and speed < 0.2:
+            explosion_sequence_active = (
+                self.pending_payload_explosion is not None
+                or self.player_exploding
+                or self.post_explosion_wait_s > 0.0
+            )
+            if (not explosion_sequence_active) and (grounded or self.impact_stopped) and speed < 0.2:
                 self.low_speed_frames += 1
             else:
                 self.low_speed_frames = 0
 
-            if self.low_speed_frames >= 30:
+            if (not explosion_sequence_active) and self.low_speed_frames >= 30:
                 self._finalize_day()
                 return
 
@@ -658,18 +835,14 @@ class Game:
         
         elif self.state == STATE_PLAYING:
             # Draw game with camera offset
-            # Draw background (not affected by camera)
-            # Sky gradient for depth
-            for y in range(SCREEN_HEIGHT):
-                ratio = y / SCREEN_HEIGHT
-                r = int(COLOR_SKY[0] + (COLOR_SKY_DARK[0] - COLOR_SKY[0]) * ratio)
-                g = int(COLOR_SKY[1] + (COLOR_SKY_DARK[1] - COLOR_SKY[1]) * ratio)
-                b = int(COLOR_SKY[2] + (COLOR_SKY_DARK[2] - COLOR_SKY[2]) * ratio)
-                pygame.draw.line(self.screen, (r, g, b), (0, y), (SCREEN_WIDTH, y))
+            self.draw_flight_background(self.screen)
             
             # Draw game elements with camera offset applied
             self.draw_terrain_with_camera(self.screen)
-            self.draw_player_with_camera(self.screen)
+            self.draw_motion_effects_with_camera(self.screen)
+            if not self.player_exploding:
+                self.draw_player_with_camera(self.screen)
+            self.draw_player_explosion_with_camera(self.screen)
             
             self.ui_manager.draw_stats(self.screen, self.player, self.environment)
             terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
@@ -712,6 +885,139 @@ class Game:
             self.draw()
         
         pygame.quit()
+
+    def _update_flight_visuals(self, dt, speed_mps, controls):
+        """Update non-gameplay visual effects for flight readability and feel."""
+        # Fade old trail points.
+        for p in self.player_trail:
+            p["life"] -= dt
+        self.player_trail = [p for p in self.player_trail if p["life"] > 0.0]
+
+        # Spawn contrail points at higher speeds.
+        if (not self.player_exploding) and speed_mps >= TRAIL_SPAWN_SPEED_MPS:
+            spawn_rate = 16.0 + (speed_mps - TRAIL_SPAWN_SPEED_MPS) * 0.45
+            self._trail_spawn_accum += dt * spawn_rate
+            while self._trail_spawn_accum >= 1.0:
+                self._trail_spawn_accum -= 1.0
+                self.player_trail.append({
+                    "x": self.player.x - self.player.vx * random.uniform(0.8, 1.3),
+                    "y": self.player.y + self.player.size * random.uniform(0.15, 0.55),
+                    "life": TRAIL_POINT_LIFE_S,
+                    "max": TRAIL_POINT_LIFE_S,
+                })
+
+        # Update boost particles (world-space).
+        for bp in self.boost_particles:
+            bp["life"] -= dt
+            bp["x"] += bp["vx"] * dt
+            bp["y"] += bp["vy"] * dt
+            bp["vy"] += 26.0 * dt
+        self.boost_particles = [bp for bp in self.boost_particles if bp["life"] > 0.0]
+
+        if (not self.player_exploding) and self.player.is_thrusting:
+            burst = 1 if random.random() < 0.45 else 2
+            for _ in range(burst):
+                self.boost_particles.append({
+                    "x": self.player.x - self.player.size * random.uniform(0.35, 0.65),
+                    "y": self.player.y + self.player.size * random.uniform(0.10, 0.45),
+                    "vx": -random.uniform(60.0, 150.0),
+                    "vy": random.uniform(-40.0, 40.0),
+                    "life": BOOST_PARTICLE_LIFE_S,
+                    "max": BOOST_PARTICLE_LIFE_S,
+                })
+
+        # Update speed lines (screen-space parallax style).
+        for sl in self.speed_lines:
+            sl["x"] += sl["vx"] * dt
+            sl["life"] -= dt
+        self.speed_lines = [sl for sl in self.speed_lines if sl["life"] > 0.0 and sl["x"] > -120]
+
+        if speed_mps >= SPEED_LINE_SPAWN_SPEED_MPS:
+            density = (speed_mps - SPEED_LINE_SPAWN_SPEED_MPS) * 0.22
+            self._speed_line_spawn_accum += dt * density
+            while self._speed_line_spawn_accum >= 1.0:
+                self._speed_line_spawn_accum -= 1.0
+                self.speed_lines.append({
+                    "x": SCREEN_WIDTH + random.uniform(20, 160),
+                    "y": random.uniform(30, SCREEN_HEIGHT - 140),
+                    "len": random.uniform(18, 68),
+                    "vx": -random.uniform(220.0, 520.0),
+                    "life": random.uniform(0.28, 0.62),
+                    "max": 0.62,
+                })
+
+    def draw_flight_background(self, surface):
+        """Draw animated sky, sun glow, and parallax atmosphere."""
+        # Animated gradient with subtle hue drift.
+        t = self.render_time_s
+        for y in range(SCREEN_HEIGHT):
+            ratio = y / max(1, SCREEN_HEIGHT - 1)
+            wave = math.sin(t * 0.35 + ratio * 4.2) * 6.0
+            r = int(max(0, min(255, COLOR_SKY[0] + (COLOR_SKY_DARK[0] - COLOR_SKY[0]) * ratio + wave * 0.35)))
+            g = int(max(0, min(255, COLOR_SKY[1] + (COLOR_SKY_DARK[1] - COLOR_SKY[1]) * ratio + wave * 0.45)))
+            b = int(max(0, min(255, COLOR_SKY[2] + (COLOR_SKY_DARK[2] - COLOR_SKY[2]) * ratio + wave * 0.6)))
+            pygame.draw.line(surface, (r, g, b), (0, y), (SCREEN_WIDTH, y))
+
+        # Sun + halo.
+        sun_x = int(SCREEN_WIDTH * 0.83)
+        sun_y = int(104 + math.sin(t * 0.25) * 7)
+        for radius, alpha in ((120, 36), (88, 52), (58, 84)):
+            halo = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(halo, (255, 240, 185, alpha), (radius + 2, radius + 2), radius)
+            surface.blit(halo, (sun_x - radius - 2, sun_y - radius - 2))
+        pygame.draw.circle(surface, (255, 247, 208), (sun_x, sun_y), 34)
+
+        # Far parallax mountain silhouettes.
+        cam = self.camera_x
+        bands = [
+            {"speed": 0.10, "y": SCREEN_HEIGHT * 0.56, "amp": 22, "color": (132, 170, 206)},
+            {"speed": 0.18, "y": SCREEN_HEIGHT * 0.63, "amp": 30, "color": (112, 150, 188)},
+        ]
+        for band in bands:
+            pts = []
+            step = 70
+            for sx in range(-step, SCREEN_WIDTH + step * 2, step):
+                wx = sx + cam * band["speed"]
+                y = band["y"] + math.sin(wx * 0.0065 + t * 0.14) * band["amp"] + math.sin(wx * 0.0125) * (band["amp"] * 0.35)
+                pts.append((sx, int(y)))
+            pts.append((SCREEN_WIDTH + step * 2, SCREEN_HEIGHT))
+            pts.append((-step, SCREEN_HEIGHT))
+            pygame.draw.polygon(surface, band["color"], pts)
+
+        # Speed lines overlay (behind terrain/player but above sky).
+        for sl in self.speed_lines:
+            life_k = max(0.0, min(1.0, sl["life"] / max(1e-5, sl["max"])))
+            alpha = int(120 * life_k)
+            col = (230, 240, 255, alpha)
+            streak = pygame.Surface((int(sl["len"]) + 3, 3), pygame.SRCALPHA)
+            pygame.draw.line(streak, col, (0, 1), (int(sl["len"]), 1), 2)
+            surface.blit(streak, (sl["x"], sl["y"]))
+
+    def draw_motion_effects_with_camera(self, surface):
+        """Draw world-space trail and boost effects with camera offset."""
+        off_x = self.camera_x
+        off_y = self.camera_y
+
+        # Contrail dots.
+        for p in self.player_trail:
+            life_k = max(0.0, min(1.0, p["life"] / max(1e-5, p["max"])))
+            r = max(1, int(5 * life_k))
+            alpha = int(150 * life_k)
+            x = int(p["x"] - off_x)
+            y = int(p["y"] - off_y)
+            blob = pygame.Surface((r * 4 + 2, r * 4 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(blob, (212, 232, 252, alpha), (r * 2 + 1, r * 2 + 1), r * 2)
+            surface.blit(blob, (x - (r * 2 + 1), y - (r * 2 + 1)))
+
+        # Engine particles.
+        for bp in self.boost_particles:
+            life_k = max(0.0, min(1.0, bp["life"] / max(1e-5, bp["max"])))
+            x = int(bp["x"] - off_x)
+            y = int(bp["y"] - off_y)
+            size = max(1, int(5 * life_k))
+            pygame.draw.circle(surface, (255, 172, 92), (x, y), size)
+            if life_k > 0.45:
+                pygame.draw.circle(surface, (255, 232, 175), (x, y), max(1, size - 1))
     
     def draw_terrain_with_camera(self, surface):
         """Draw terrain with camera offset applied."""
@@ -847,14 +1153,18 @@ class Game:
             hazard_screen_y = hazard.y - offset_y
             if -180 < hazard_screen_x < SCREEN_WIDTH + 180:  # Only draw if visible
                 if hazard.type == "snowman":
-                    pygame.draw.circle(surface, (250, 252, 255), (int(hazard_screen_x), int(hazard_screen_y - 18)), 16)
-                    pygame.draw.circle(surface, (250, 252, 255), (int(hazard_screen_x), int(hazard_screen_y - 44)), 12)
-                    pygame.draw.circle(surface, (35, 40, 45), (int(hazard_screen_x - 4), int(hazard_screen_y - 47)), 2)
-                    pygame.draw.circle(surface, (35, 40, 45), (int(hazard_screen_x + 4), int(hazard_screen_y - 47)), 2)
+                    body_r = max(16, int(hazard.height * 0.24))
+                    head_r = max(12, int(hazard.height * 0.17))
+                    body_y = int(hazard_screen_y - body_r)
+                    head_y = int(body_y - body_r - head_r + 8)
+                    pygame.draw.circle(surface, (250, 252, 255), (int(hazard_screen_x), body_y), body_r)
+                    pygame.draw.circle(surface, (250, 252, 255), (int(hazard_screen_x), head_y), head_r)
+                    pygame.draw.circle(surface, (35, 40, 45), (int(hazard_screen_x - head_r * 0.3), int(head_y - head_r * 0.25)), max(2, head_r // 6))
+                    pygame.draw.circle(surface, (35, 40, 45), (int(hazard_screen_x + head_r * 0.3), int(head_y - head_r * 0.25)), max(2, head_r // 6))
                     pygame.draw.polygon(surface, (255, 140, 30), [
-                        (hazard_screen_x + 1, hazard_screen_y - 43),
-                        (hazard_screen_x + 12, hazard_screen_y - 41),
-                        (hazard_screen_x + 1, hazard_screen_y - 39),
+                        (hazard_screen_x + 1, head_y - 1),
+                        (hazard_screen_x + head_r, head_y + 1),
+                        (hazard_screen_x + 1, head_y + 3),
                     ])
                 elif hazard.type == "snowmound":
                     pygame.draw.ellipse(surface, (235, 242, 252), (hazard_screen_x - 42, hazard_screen_y - 38, 84, 40))
@@ -1002,6 +1312,43 @@ class Game:
                 
                 pygame.draw.rect(surface, (200, 200, 200), (bar_x, bar_y, bar_width, bar_height), 1)
 
+    def draw_player_explosion_with_camera(self, surface):
+        """Draw the delayed payload detonation blast around the player."""
+        if not self.player_exploding:
+            return
+
+        offset = self.camera_x
+        offset_y = self.camera_y
+        ex = self.player_explosion_world[0] - offset
+        ey = self.player_explosion_world[1] - offset_y
+        progress = 1.0 - (self.player_explosion_anim_s / 0.55)
+        progress = max(0.0, min(1.0, progress))
+
+        base_radius = int(14 + 120 * progress)
+        glow_radius = int(base_radius * 1.45)
+        alpha = int(210 * (1.0 - progress))
+
+        blast = pygame.Surface((glow_radius * 2 + 4, glow_radius * 2 + 4), pygame.SRCALPHA)
+        cx = glow_radius + 2
+        cy = glow_radius + 2
+        pygame.draw.circle(blast, (255, 120, 60, alpha), (cx, cy), glow_radius)
+        pygame.draw.circle(blast, (255, 195, 110, min(255, alpha + 25)), (cx, cy), base_radius)
+        pygame.draw.circle(blast, (255, 240, 190, min(255, alpha + 40)), (cx, cy), max(3, int(base_radius * 0.45)))
+
+        # Light shrapnel arcs to sell the blast motion.
+        shard_count = 8
+        for i in range(shard_count):
+            ang = (i / float(shard_count)) * math.tau + progress * 2.2
+            r1 = int(base_radius * 0.85)
+            r2 = int(base_radius * 1.2)
+            x1 = cx + int(math.cos(ang) * r1)
+            y1 = cy + int(math.sin(ang) * r1)
+            x2 = cx + int(math.cos(ang) * r2)
+            y2 = cy + int(math.sin(ang) * r2)
+            pygame.draw.line(blast, (255, 230, 170, max(80, alpha)), (x1, y1), (x2, y2), 2)
+
+        surface.blit(blast, (ex - cx, ey - cy))
+
     def draw_equipment_overlay(self, surface, px, py, size, player, angle):
         """Draw oversized equipment overlay attached to penguin."""
         gear_scale = 3.5
@@ -1117,6 +1464,36 @@ class Game:
                 (wing_x + size * 0.03 * gear_scale, wing_y + size * 0.02 * gear_scale),
                 1,
             )
+
+        # Payload layer.
+        payload_key = player.payload
+        if payload_key in PAYLOAD_TIERS:
+            pstats = PAYLOAD_TIERS[payload_key]
+            ptype = pstats.get("payload_type")
+            if ptype == "regular":
+                fill = {
+                    "sand": (218, 196, 130),
+                    "iron_pellets": (150, 156, 165),
+                    "cast_iron": (112, 117, 125),
+                    "osmium": (84, 102, 130),
+                }.get(payload_key, (145, 145, 145))
+                pack_x = cx - size * 0.58 * gear_scale
+                pack_y = cy + size * 0.18 * gear_scale
+                pack_w = size * 0.46 * gear_scale
+                pack_h = size * 0.34 * gear_scale
+                pygame.draw.rect(canvas, fill, (pack_x, pack_y, pack_w, pack_h), border_radius=4)
+                pygame.draw.rect(canvas, (238, 240, 245), (pack_x + size * 0.04 * gear_scale, pack_y + size * 0.04 * gear_scale, pack_w * 0.5, pack_h * 0.24), border_radius=3)
+                pygame.draw.line(canvas, (112, 118, 128), (pack_x + pack_w, pack_y + size * 0.06 * gear_scale), (cx - size * 0.02 * gear_scale, cy + size * 0.08 * gear_scale), 2)
+                pygame.draw.line(canvas, (112, 118, 128), (pack_x + pack_w, pack_y + pack_h - size * 0.06 * gear_scale), (cx - size * 0.02 * gear_scale, cy + size * 0.22 * gear_scale), 2)
+            else:
+                body = (170, 75, 60) if payload_key == "dyna_might" else ((130, 145, 122) if payload_key == "c4" else (132, 185, 100))
+                pack_x = cx - size * 0.62 * gear_scale
+                pack_y = cy + size * 0.16 * gear_scale
+                pack_w = size * 0.52 * gear_scale
+                pack_h = size * 0.30 * gear_scale
+                pygame.draw.rect(canvas, body, (pack_x, pack_y, pack_w, pack_h), border_radius=4)
+                pygame.draw.circle(canvas, (245, 206, 90), (int(pack_x + pack_w - size * 0.02 * gear_scale), int(pack_y + pack_h * 0.5)), int(size * 0.05 * gear_scale))
+                pygame.draw.line(canvas, (245, 206, 90), (pack_x + pack_w - size * 0.02 * gear_scale, pack_y + pack_h * 0.5), (pack_x + pack_w + size * 0.08 * gear_scale, pack_y + pack_h * 0.2), 2)
 
         # Booster layer.
         gear = player.booster
@@ -1234,9 +1611,4 @@ class Game:
         rotated_overlay = pygame.transform.rotozoom(canvas, angle, 1.0)
         overlay_rect = rotated_overlay.get_rect(center=(px, py))
         surface.blit(rotated_overlay, overlay_rect)
-
-
-if __name__ == "__main__":
-    game = Game()
-    game.run()
 

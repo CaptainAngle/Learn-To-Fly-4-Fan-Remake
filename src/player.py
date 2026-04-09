@@ -17,6 +17,7 @@ class Player:
         self.sled = None
         self.glider = None
         self.booster = None
+        self.payload = None
         self.fuel = 0
         self.max_fuel = 0
         self.distance_traveled = 0
@@ -221,6 +222,10 @@ class Player:
             self.booster = None
             self.max_fuel = 0
             self.fuel = 0
+
+    def equip_payload(self, payload_name):
+        if payload_name in PAYLOAD_TIERS or payload_name is None:
+            self.payload = payload_name
     
     def draw(self, surface):
         """Draw player as a penguin sprite."""

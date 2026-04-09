@@ -248,7 +248,7 @@ class Hazard:
         self.width = self.size * 2
         self.height = self.size * 2
         if self.type == "snowman":
-            self.width, self.height = 36, 70
+            self.width, self.height = 72, 140
         elif self.type == "snowmound":
             self.width, self.height = 78, 44
         elif self.type == "rocky_hill":
