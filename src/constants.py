@@ -1,15 +1,15 @@
 # Game Constants
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 800
-FPS = 120
+FPS = 60
 
 # Physics
 GRAVITY = 0.35
 MAX_VELOCITY = 32
 BOOST_FORCE = 0.9
-ROTATION_SPEED = 0.75
+ROTATION_SPEED = 1.5
 PIXELS_PER_METER = 100
-WORLD_LENGTH_M = 1000
+WORLD_LENGTH_M = 6000
 
 # Aerodynamics (SI units)
 GRAVITY_MPS2 = 9.81
@@ -34,6 +34,23 @@ FLAT_ICE_FRICTION = 0.99985
 ZERO_FRICTION_SLOPE_THRESHOLD = 0.08
 RAMP_GRAVITY_ALONG_SLOPE_MULT = 0.45
 RAMP_FRICTION_LOSS_DIVISOR = 20.0
+
+# Obstacle progression
+OBSTACLE_LAYOUT = [
+    {"name": "Snowman", "distance_m": 50, "kind": "snowman", "hp": 26, "destruction_points": 1},
+    {"name": "Snowmound", "distance_m": 400, "kind": "snowmound", "hp": 44, "destruction_points": 2},
+    {"name": "Rocky Hill", "distance_m": 1000, "kind": "rocky_hill", "hp": 76, "destruction_points": 3},
+    {"name": "Iceberg", "distance_m": 2200, "kind": "iceberg", "hp": 118, "destruction_points": 4},
+    {"name": "The Wall", "distance_m": 4500, "kind": "glacier_wall", "hp": 190, "destruction_points": 6},
+]
+
+# End-of-day earnings weights
+# dollars = distance*k + max_speed*l + max_altitude*m + duration*n + destruction*o
+EARNING_K_DISTANCE = 0.72
+EARNING_L_MAX_SPEED = 3.4
+EARNING_M_MAX_ALTITUDE = 6.0
+EARNING_N_DURATION = 1.35
+EARNING_O_DESTRUCTION = 180.0
 
 # Game States
 STATE_MENU = "menu"

@@ -239,11 +239,29 @@ class Terrain:
 
 
 class Hazard:
-    def __init__(self, x, y, hazard_type="spike"):
+    def __init__(self, x, y, hazard_type="spike", name=None, hp=1, destruction_points=0):
         self.x = x
         self.y = y
         self.type = hazard_type  # "spike", "wall", "ice"
+        self.name = name or hazard_type
         self.size = 15
+        self.width = self.size * 2
+        self.height = self.size * 2
+        if self.type == "snowman":
+            self.width, self.height = 36, 70
+        elif self.type == "snowmound":
+            self.width, self.height = 78, 44
+        elif self.type == "rocky_hill":
+            self.width, self.height = 120, 68
+        elif self.type == "iceberg":
+            self.width, self.height = 145, 108
+        elif self.type == "glacier_wall":
+            self.width, self.height = 170, 230
+        self.max_hp = max(1.0, float(hp))
+        self.hp = self.max_hp
+        self.destruction_points = int(destruction_points)
+        self.destroyed = False
+        self.last_hit_ms = -10000
         self.active = True
     
     def draw(self, surface):
@@ -263,18 +281,14 @@ class Hazard:
             pygame.draw.rect(surface, (128, 128, 128), (self.x - self.size, self.y - self.size * 2, self.size * 2, self.size * 4))
     
     def check_collision(self, player):
-        """Check collision with player using proper circle collision."""
-        # More accurate circular collision detection
-        dist_x = abs(player.x - self.x)
-        dist_y = abs(player.y - self.y)
-        
-        # Quick check for obvious misses
-        if dist_x > (self.size + player.size) or dist_y > (self.size + player.size):
+        """Check collision against obstacle bounds (circle vs expanded AABB)."""
+        if self.destroyed or not self.active:
             return False
-        
-        # Detailed distance check
-        dist = math.sqrt(dist_x**2 + dist_y**2)
-        return dist < (self.size + player.size)
+        left = self.x - self.width * 0.5 - player.size
+        right = self.x + self.width * 0.5 + player.size
+        top = self.y - self.height - player.size
+        bottom = self.y + player.size * 0.35
+        return left <= player.x <= right and top <= player.y <= bottom
 
 
 class Environment:
@@ -290,8 +304,21 @@ class Environment:
         self.spawn_hazards()
     
     def spawn_hazards(self):
-        """No hazards in MVP flight mechanics phase."""
+        """Spawn fixed milestone obstacles along the course."""
         self.hazards = []
+        for entry in OBSTACLE_LAYOUT:
+            world_x = entry["distance_m"] * PIXELS_PER_METER
+            ground_y = self.terrain.get_ground_y_at(world_x)
+            self.hazards.append(
+                Hazard(
+                    world_x,
+                    ground_y,
+                    hazard_type=entry["kind"],
+                    name=entry["name"],
+                    hp=entry["hp"],
+                    destruction_points=entry["destruction_points"],
+                )
+            )
     
     def update(self):
         """Update environment."""

@@ -3,7 +3,6 @@ import pygame
 from src.constants import *
 from src.player import Player
 from src.environment import Environment
-from src.mission import MissionManager
 from src.save_system import SaveSystem
 from src.ui import UIManager, Button
 
@@ -23,7 +22,6 @@ class Game:
         # Systems
         self.save_system = SaveSystem()
         self.ui_manager = UIManager()
-        self.mission_manager = MissionManager()
         
         # Game objects
         self.player = None
@@ -44,7 +42,11 @@ class Game:
         # Flight state tracking
         self.flight_distance = 0
         self.flight_coins_earned = 0
-        self.mission_completed_this_flight = False
+        self.flight_breakdown = {}
+        self.flight_max_speed_mps = 0.0
+        self.flight_max_altitude_m = 0.0
+        self.flight_duration_s = 0.0
+        self.flight_destruction_points = 0
         self.low_speed_frames = 0
         self.shop_catalog_category = None
         self.toast_text = ""
@@ -52,6 +54,7 @@ class Game:
         self.toast_timer = 0.0
         self.controls_hint_timer = 8.0
         self.was_ramp_locked = False
+        self.ramp_detached_once = False
 
     def set_toast(self, text, color=(225, 235, 248), duration=2.0):
         """Show a short transient message for UX feedback."""
@@ -85,7 +88,21 @@ class Game:
             save_data["ramp_drop_level"] = 0
         save_data["ramp_drop_level"] = max(0, min(int(save_data["ramp_drop_level"]), len(RAMP_DROP_TIERS) - 1))
 
+        # Gear sanity: a tier can only be equipped if it is unlocked in the matching category.
+        did_sanitize = False
+        if save_data.get("equipped_sled") not in save_data["unlocked_sleds"]:
+            save_data["equipped_sled"] = None
+            did_sanitize = True
+        if save_data.get("equipped_glider") not in save_data["unlocked_gliders"]:
+            save_data["equipped_glider"] = None
+            did_sanitize = True
+        if save_data.get("equipped_booster") not in save_data["unlocked_boosters"]:
+            save_data["equipped_booster"] = None
+            did_sanitize = True
+
         self.game_data = save_data
+        if did_sanitize:
+            self.save_game()
         
         # Create a dummy player for menus
         self.player = Player(100, 200)
@@ -107,18 +124,6 @@ class Game:
             Button(SCREEN_WIDTH // 2 - 75, 450, 150, 60, "Settings", (150, 100, 100)),
             Button(SCREEN_WIDTH // 2 - 75, 550, 150, 60, "Quit", (150, 50, 50)),
         ]
-        
-        # Mission select buttons
-        self.buttons["mission_select"] = [
-            Button(50, SCREEN_HEIGHT - 80, 120, 60, "Back", (100, 100, 100)),
-        ]
-        
-        # For each mission
-        for i in range(len(self.mission_manager.missions)):
-            btn = Button(SCREEN_WIDTH - 200, 130 + (i * 50), 150, 40, "Select", (100, 150, 100))
-            if "mission_buttons" not in self.buttons:
-                self.buttons["mission_buttons"] = []
-            self.buttons["mission_buttons"].append(btn)
         
         # Upgrade screen buttons + box layout + catalog controls.
         self.buttons["upgrade"] = [
@@ -158,9 +163,14 @@ class Game:
         self.camera_y = 0
         self.flight_distance = 0
         self.flight_coins_earned = 0
-        self.mission_completed_this_flight = False
+        self.flight_breakdown = {}
+        self.flight_max_speed_mps = 0.0
+        self.flight_max_altitude_m = 0.0
+        self.flight_duration_s = 0.0
+        self.flight_destruction_points = 0
         self.low_speed_frames = 0
         self.was_ramp_locked = False
+        self.ramp_detached_once = False
         
         self.player.equip_sled(self.game_data["equipped_sled"])
         self.player.equip_glider(self.game_data["equipped_glider"])
@@ -180,14 +190,10 @@ class Game:
                     self.save_game()
                 elif event.key == pygame.K_RETURN:
                     if self.state == STATE_MENU:
-                        self.state = STATE_MISSION_SELECT
-                    elif self.state == STATE_MISSION_SELECT:
-                        mission = self.mission_manager.select_mission(1)
-                        if mission:
-                            self.start_flight()
+                        self.start_flight()
                     elif self.state == STATE_RESULTS:
                         self.state = STATE_MENU
-                elif event.key == pygame.K_b and self.state in (STATE_UPGRADE, STATE_MISSION_SELECT):
+                elif event.key == pygame.K_b and self.state == STATE_UPGRADE:
                     self.state = STATE_MENU
             
             if event.type == pygame.MOUSEBUTTONDOWN:
@@ -211,23 +217,13 @@ class Game:
             for i, button in enumerate(self.buttons["menu"]):
                 if button.is_clicked(mouse_pos, True):
                     if i == 0:  # Start Flight
-                        self.state = STATE_MISSION_SELECT
+                        self.start_flight()
                     elif i == 1:  # Gear Shop
                         self.state = STATE_UPGRADE
                     elif i == 2:  # Settings
                         pass  # TODO: Settings
                     elif i == 3:  # Quit
                         self.running = False
-        
-        elif self.state == STATE_MISSION_SELECT:
-            if self.buttons["mission_select"][0].is_clicked(mouse_pos, True):
-                self.state = STATE_MENU
-            
-            for i, button in enumerate(self.buttons.get("mission_buttons", [])):
-                if button.is_clicked(mouse_pos, True):
-                    mission = self.mission_manager.select_mission(i + 1)
-                    if mission:
-                        self.start_flight()
         
         elif self.state == STATE_UPGRADE:
             if self.buttons["upgrade"][0].is_clicked(mouse_pos, True):
@@ -388,6 +384,64 @@ class Game:
 
         self.player.vx = tx * tangential_speed
         self.player.vy = ty * tangential_speed
+
+    def _resolve_obstacle_hits(self, controls, dt):
+        """Handle obstacle collision damage and destruction rewards during flight."""
+        for obstacle in self.environment.hazards:
+            if obstacle.destroyed or not obstacle.active:
+                continue
+            if not obstacle.check_collision(self.player):
+                continue
+
+            now_ms = pygame.time.get_ticks()
+            if now_ms - obstacle.last_hit_ms < 180:
+                continue
+            obstacle.last_hit_ms = now_ms
+
+            speed_mps = math.hypot(self.player.vx, self.player.vy) * FPS / PIXELS_PER_METER
+            impact_damage = (speed_mps * 0.95) + (6.0 if controls.get("boost", False) else 0.0)
+            if not obstacle.destroyed:
+                obstacle.hp -= impact_damage
+
+            if obstacle.hp <= 0:
+                obstacle.destroyed = True
+                obstacle.active = False
+                self.flight_destruction_points += obstacle.destruction_points
+                self.set_toast(f"Destroyed: {obstacle.name}", (120, 220, 150), duration=1.6)
+            else:
+                # Incomplete impact bleeds speed but does not hard-stop the run.
+                self.player.vx *= 0.82
+                self.player.vy *= 0.82
+
+    def _finalize_day(self):
+        """Compute earnings from flight stats and transition to result screen."""
+        self.flight_distance = self.player.distance_traveled
+        distance_money = self.flight_distance * EARNING_K_DISTANCE
+        speed_money = self.flight_max_speed_mps * EARNING_L_MAX_SPEED
+        altitude_money = self.flight_max_altitude_m * EARNING_M_MAX_ALTITUDE
+        duration_money = self.flight_duration_s * EARNING_N_DURATION
+        destruction_money = self.flight_destruction_points * EARNING_O_DESTRUCTION
+
+        total = int(distance_money + speed_money + altitude_money + duration_money + destruction_money)
+        self.flight_coins_earned = max(0, total)
+        self.flight_breakdown = {
+            "distance": self.flight_distance,
+            "max_speed": self.flight_max_speed_mps,
+            "max_altitude": self.flight_max_altitude_m,
+            "duration": self.flight_duration_s,
+            "destruction": self.flight_destruction_points,
+            "distance_money": int(distance_money),
+            "speed_money": int(speed_money),
+            "altitude_money": int(altitude_money),
+            "duration_money": int(duration_money),
+            "destruction_money": int(destruction_money),
+        }
+
+        self.player.coins += self.flight_coins_earned
+        self.game_data["total_coins"] += self.flight_coins_earned
+        self.game_data["total_distance"] += self.flight_distance
+        self.save_game()
+        self.state = STATE_RESULTS
     
     def update(self, controls, dt=1.0 / FPS):
         """Update game state."""
@@ -399,16 +453,29 @@ class Game:
             prev_x = self.player.x
             prev_y = self.player.y
             prev_speed = math.hypot(self.player.vx, self.player.vy)
+            self.flight_duration_s += dt
 
             terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
             slope = self._get_terrain_slope_at_x(self.player.x)
             surface_type = self.environment.terrain.get_surface_type_at(self.player.x)
-            force_ramp_lock = (surface_type == "ice" and self.player.x <= self.environment.terrain.ice_end_x)
+            ice_end_x = self.environment.terrain.ice_end_x
+            in_launch_ramp_zone = (surface_type == "ice" and self.player.x <= ice_end_x)
+
+            # One-way latch: once you leave launch-ramp lock, never reattach to ice ramp geometry this run.
+            if (not self.ramp_detached_once) and (
+                self.player.x > (ice_end_x + 2)
+                or (self.was_ramp_locked and not in_launch_ramp_zone)
+            ):
+                self.ramp_detached_once = True
+
+            force_ramp_lock = in_launch_ramp_zone and (not self.ramp_detached_once)
             left_ramp_this_frame = self.was_ramp_locked and (not force_ramp_lock)
 
             # Ground contact: allow small tolerance so steep up-ramp transitions stay attached.
             bottom = self.player.y + self.player.size
             grounded = (bottom >= terrain_y - 3) and (bottom <= terrain_y + 18)
+            if self.ramp_detached_once and in_launch_ramp_zone:
+                grounded = False
             if force_ramp_lock:
                 grounded = True
             if grounded:
@@ -431,7 +498,7 @@ class Game:
                 friction = 1.0
 
             # Sled detaches once the penguin leaves the launch ramp geometry.
-            if self.player.sled_attached and self.player.x > (self.environment.terrain.ice_end_x + 2):
+            if self.player.sled_attached and self.player.x > (ice_end_x + 2):
                 self.player.sled_attached = False
 
             # Sled reduces ramp friction while attached and on ice.
@@ -474,6 +541,8 @@ class Game:
 
                 if sy_bottom >= sample_ground_y:
                     sample_surface = self.environment.terrain.get_surface_type_at(sx)
+                    if sample_surface == "ice" and self.ramp_detached_once:
+                        continue
                     self.player.x = sx
                     self.player.y = sample_ground_y - self.player.size
                     preserve_ratio = 0.9 if (sample_surface == "ice" and abs(sample_slope) < 0.12) else 0.0
@@ -489,15 +558,20 @@ class Game:
                 slope = self._get_terrain_slope_at_x(self.player.x)
                 if abs(slope) <= 2.5 and self.player.y + self.player.size >= terrain_y:
                     sample_surface = self.environment.terrain.get_surface_type_at(self.player.x)
-                    self.player.y = terrain_y - self.player.size
-                    preserve_ratio = 0.9 if (sample_surface == "ice" and abs(slope) < 0.12) else 0.0
-                    self._project_velocity_to_slope(slope, preserve_ratio=preserve_ratio)
-                    surface_type = sample_surface
-                    grounded = True
+                    if sample_surface == "ice" and self.ramp_detached_once:
+                        sample_surface = None
+                    if sample_surface is None:
+                        pass
+                    else:
+                        self.player.y = terrain_y - self.player.size
+                        preserve_ratio = 0.9 if (sample_surface == "ice" and abs(slope) < 0.12) else 0.0
+                        self._project_velocity_to_slope(slope, preserve_ratio=preserve_ratio)
+                        surface_type = sample_surface
+                        grounded = True
 
             # Hard lock to ramp while still on launch ice so the penguin cannot drop off early.
             surface_type = self.environment.terrain.get_surface_type_at(self.player.x)
-            if surface_type == "ice" and self.player.x <= self.environment.terrain.ice_end_x:
+            if (not self.ramp_detached_once) and surface_type == "ice" and self.player.x <= ice_end_x:
                 lock_terrain_y = self.environment.terrain.get_ground_y_at(self.player.x)
                 lock_slope = self._get_terrain_slope_at_x(self.player.x)
                 self.player.y = lock_terrain_y - self.player.size
@@ -514,31 +588,28 @@ class Game:
                     self.player.vx *= scale
                     self.player.vy *= scale
 
-            self.was_ramp_locked = (self.environment.terrain.get_surface_type_at(self.player.x) == "ice" and self.player.x <= self.environment.terrain.ice_end_x)
+            self.was_ramp_locked = ((not self.ramp_detached_once) and self.environment.terrain.get_surface_type_at(self.player.x) == "ice" and self.player.x <= ice_end_x)
+
+            self._resolve_obstacle_hits(controls, dt)
 
             self.environment.update()
 
-            # End the day if the penguin has effectively stopped.
             speed = (self.player.vx ** 2 + self.player.vy ** 2) ** 0.5
+            speed_mps = speed * FPS / PIXELS_PER_METER
+            self.flight_max_speed_mps = max(self.flight_max_speed_mps, speed_mps)
+
+            terrain_y_now = self.environment.terrain.get_ground_y_at(self.player.x)
+            altitude_m = max(0.0, (terrain_y_now - (self.player.y + self.player.size)) / PIXELS_PER_METER)
+            self.flight_max_altitude_m = max(self.flight_max_altitude_m, altitude_m)
+
+            # End the day if the penguin has effectively stopped.
             if grounded and speed < 0.2:
                 self.low_speed_frames += 1
             else:
                 self.low_speed_frames = 0
 
             if self.low_speed_frames >= 30:
-                self.flight_distance = self.player.distance_traveled
-                if self.mission_manager.current_mission:
-                    if self.mission_manager.current_mission.check_completion(self.flight_distance):
-                        self.flight_coins_earned = self.mission_manager.current_mission.reward_coins
-                        self.mission_completed_this_flight = True
-
-                base_coins = int(self.flight_distance / 10)
-                self.flight_coins_earned += base_coins
-                self.player.coins += self.flight_coins_earned
-                self.game_data["total_coins"] += self.flight_coins_earned
-                self.game_data["total_distance"] += self.flight_distance
-                self.save_game()
-                self.state = STATE_RESULTS
+                self._finalize_day()
                 return
 
             # Keep penguin mostly stationary on screen while map scrolls.
@@ -552,19 +623,7 @@ class Game:
                 self.player.x = 0
                 self.player.vx = 0
             elif self.player.x > self.environment.terrain.width - 50:
-                self.flight_distance = self.player.distance_traveled
-                if self.mission_manager.current_mission:
-                    if self.mission_manager.current_mission.check_completion(self.flight_distance):
-                        self.flight_coins_earned = self.mission_manager.current_mission.reward_coins
-                        self.mission_completed_this_flight = True
-                
-                base_coins = int(self.flight_distance / 10)
-                self.flight_coins_earned += base_coins
-                self.player.coins += self.flight_coins_earned
-                self.game_data["total_coins"] += self.flight_coins_earned
-                self.game_data["total_distance"] += self.flight_distance
-                self.save_game()
-                self.state = STATE_RESULTS
+                self._finalize_day()
     
     def draw(self):
         """Render game."""
@@ -575,14 +634,6 @@ class Game:
             for button in self.buttons["menu"]:
                 button.update(mouse_pos)
             self.ui_manager.draw_menu(self.screen, self.buttons["menu"])
-        
-        elif self.state == STATE_MISSION_SELECT:
-            for button in self.buttons["mission_select"]:
-                button.update(mouse_pos)
-            for button in self.buttons.get("mission_buttons", []):
-                button.update(mouse_pos)
-            self.ui_manager.draw_mission_select(self.screen, self.mission_manager.missions, 
-                                               self.buttons["mission_select"] + self.buttons.get("mission_buttons", []))
         
         elif self.state == STATE_UPGRADE:
             for button in self.buttons["upgrade"]:
@@ -625,10 +676,6 @@ class Game:
             self.ui_manager.draw_flight_hud(self.screen, self.player, terrain_y)
             if self.controls_hint_timer > 0.0:
                 self.ui_manager.draw_controls_hint(self.screen)
-            
-            # Draw mission progress bar
-            if self.mission_manager.current_mission:
-                self.ui_manager.draw_mission_progress(self.screen, self.player, self.mission_manager.current_mission)
 
         if self.toast_timer > 0.0 and self.toast_text:
             self.ui_manager.draw_toast(self.screen, self.toast_text, self.toast_color)
@@ -637,7 +684,7 @@ class Game:
             for button in self.buttons["results"]:
                 button.update(mouse_pos)
             self.ui_manager.draw_results_screen(self.screen, self.flight_distance, 
-                                               self.flight_coins_earned, self.mission_completed_this_flight,
+                                               self.flight_coins_earned, self.flight_breakdown,
                                                self.buttons["results"])
         
         pygame.display.flip()
@@ -794,29 +841,61 @@ class Game:
         
         # Draw hazards with camera offset
         for hazard in self.environment.hazards:
+            if hazard.destroyed:
+                continue
             hazard_screen_x = hazard.x - offset
             hazard_screen_y = hazard.y - offset_y
-            if -50 < hazard_screen_x < SCREEN_WIDTH + 50:  # Only draw if visible
-                if hazard.type == "spike":
-                    pygame.draw.polygon(surface, (255, 80, 80), [
-                        (hazard_screen_x, hazard_screen_y - hazard.size),
-                        (hazard_screen_x - hazard.size, hazard_screen_y + hazard.size),
-                        (hazard_screen_x + hazard.size, hazard_screen_y + hazard.size),
+            if -180 < hazard_screen_x < SCREEN_WIDTH + 180:  # Only draw if visible
+                if hazard.type == "snowman":
+                    pygame.draw.circle(surface, (250, 252, 255), (int(hazard_screen_x), int(hazard_screen_y - 18)), 16)
+                    pygame.draw.circle(surface, (250, 252, 255), (int(hazard_screen_x), int(hazard_screen_y - 44)), 12)
+                    pygame.draw.circle(surface, (35, 40, 45), (int(hazard_screen_x - 4), int(hazard_screen_y - 47)), 2)
+                    pygame.draw.circle(surface, (35, 40, 45), (int(hazard_screen_x + 4), int(hazard_screen_y - 47)), 2)
+                    pygame.draw.polygon(surface, (255, 140, 30), [
+                        (hazard_screen_x + 1, hazard_screen_y - 43),
+                        (hazard_screen_x + 12, hazard_screen_y - 41),
+                        (hazard_screen_x + 1, hazard_screen_y - 39),
                     ])
-                    # Spike highlight
-                    pygame.draw.polygon(surface, (255, 150, 150), [
-                        (hazard_screen_x, hazard_screen_y - hazard.size + 2),
-                        (hazard_screen_x - hazard.size * 0.5, hazard_screen_y),
-                        (hazard_screen_x + hazard.size * 0.3, hazard_screen_y),
+                elif hazard.type == "snowmound":
+                    pygame.draw.ellipse(surface, (235, 242, 252), (hazard_screen_x - 42, hazard_screen_y - 38, 84, 40))
+                    pygame.draw.ellipse(surface, (222, 232, 244), (hazard_screen_x - 36, hazard_screen_y - 28, 72, 24))
+                elif hazard.type == "rocky_hill":
+                    pygame.draw.polygon(surface, (120, 125, 132), [
+                        (hazard_screen_x - 56, hazard_screen_y),
+                        (hazard_screen_x - 24, hazard_screen_y - 48),
+                        (hazard_screen_x + 8, hazard_screen_y - 62),
+                        (hazard_screen_x + 56, hazard_screen_y),
                     ])
-                elif hazard.type == "wall":
-                    pygame.draw.rect(surface, (140, 150, 165), 
-                                   (hazard_screen_x - hazard.size, hazard_screen_y - hazard.size * 2, 
-                                    hazard.size * 2, hazard.size * 4))
-                    # Wall texture
-                    pygame.draw.rect(surface, (160, 170, 185), 
-                                    (hazard_screen_x - hazard.size + 2, hazard_screen_y - hazard.size * 2 + 2, 
-                                     hazard.size * 2 - 4, hazard.size * 4 - 4))
+                    pygame.draw.line(surface, (148, 156, 168), (hazard_screen_x - 16, hazard_screen_y - 32), (hazard_screen_x + 24, hazard_screen_y - 12), 2)
+                elif hazard.type == "iceberg":
+                    pygame.draw.polygon(surface, (170, 220, 250), [
+                        (hazard_screen_x - 66, hazard_screen_y),
+                        (hazard_screen_x - 38, hazard_screen_y - 78),
+                        (hazard_screen_x + 8, hazard_screen_y - 108),
+                        (hazard_screen_x + 62, hazard_screen_y - 56),
+                        (hazard_screen_x + 76, hazard_screen_y),
+                    ])
+                    pygame.draw.polygon(surface, (210, 242, 255), [
+                        (hazard_screen_x - 20, hazard_screen_y - 64),
+                        (hazard_screen_x + 10, hazard_screen_y - 92),
+                        (hazard_screen_x + 34, hazard_screen_y - 58),
+                    ])
+                elif hazard.type == "glacier_wall":
+                    pygame.draw.rect(surface, (150, 195, 235), (hazard_screen_x - 84, hazard_screen_y - 220, 168, 220), border_radius=6)
+                    pygame.draw.rect(surface, (200, 236, 255), (hazard_screen_x - 72, hazard_screen_y - 212, 48, 204), border_radius=4)
+                    pygame.draw.rect(surface, (182, 224, 248), (hazard_screen_x - 14, hazard_screen_y - 212, 42, 204), border_radius=4)
+                    pygame.draw.rect(surface, (205, 240, 255), (hazard_screen_x + 34, hazard_screen_y - 212, 40, 204), border_radius=4)
+
+                # HP bar + label
+                bar_w = max(44, int(hazard.width * 0.9))
+                bar_x = int(hazard_screen_x - bar_w * 0.5)
+                bar_y = int(hazard_screen_y - hazard.height - 24)
+                hp_ratio = max(0.0, min(1.0, hazard.hp / max(1.0, hazard.max_hp)))
+                pygame.draw.rect(surface, (40, 45, 55), (bar_x, bar_y, bar_w, 7), border_radius=3)
+                pygame.draw.rect(surface, (255, 125, 95), (bar_x, bar_y, int(bar_w * hp_ratio), 7), border_radius=3)
+                pygame.draw.rect(surface, (235, 235, 240), (bar_x, bar_y, bar_w, 7), 1, border_radius=3)
+                label = self.ui_manager.font_small.render(hazard.name, True, (235, 242, 250))
+                surface.blit(label, (bar_x, bar_y - 16))
     
     def draw_player_with_camera(self, surface):
         """Draw player with camera offset applied."""

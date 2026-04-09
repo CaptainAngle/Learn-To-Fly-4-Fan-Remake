@@ -32,9 +32,8 @@ class SaveSystem:
             "unlocked_gliders": [],
             "unlocked_boosters": [],
             "equipped_sled": None,
-            "equipped_glider": "kite",
+            "equipped_glider": None,
             "equipped_booster": None,
-            "missions": {},
             "best_flight_distance": 0,
         }
     

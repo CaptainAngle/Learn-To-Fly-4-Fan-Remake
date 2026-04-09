@@ -79,6 +79,7 @@ class UIManager:
             f"Booster: {BOOSTER_TIERS[player.booster]['name'] if player.booster in BOOSTER_TIERS else 'None'}",
             f"Coins: {player.coins}",
             f"Wind: {wind_direction} {abs(environment.terrain.wind_speed):.2f}",
+            f"Obstacles: {sum(1 for h in environment.hazards if getattr(h, 'destroyed', False))}/{len(environment.hazards)}",
         ]
         
         y = 10
@@ -431,8 +432,8 @@ class UIManager:
 
             close_button.draw(surface, self.font_small)
     
-    def draw_results_screen(self, surface, distance, coins_earned, mission_completed, buttons):
-        """Draw results screen after flight."""
+    def draw_results_screen(self, surface, distance, coins_earned, breakdown, buttons):
+        """Draw post-flight results and earnings breakdown."""
         # Gradient background
         for y in range(SCREEN_HEIGHT):
             ratio = y / SCREEN_HEIGHT
@@ -448,20 +449,23 @@ class UIManager:
         surface.blit(shadow, shadow_rect)
         surface.blit(title, title_rect)
         
-        result_text = [
-            f"Distance: {int(distance)} m",
-            f"Coins Earned: +{coins_earned}",
+        breakdown = breakdown or {}
+        lines = [
+            f"Distance: {int(distance)} m   (+{int(breakdown.get('distance_money', 0))}$)",
+            f"Max speed: {breakdown.get('max_speed', 0.0):.1f} m/s   (+{int(breakdown.get('speed_money', 0))}$)",
+            f"Max altitude: {breakdown.get('max_altitude', 0.0):.1f} m   (+{int(breakdown.get('altitude_money', 0))}$)",
+            f"Flight duration: {breakdown.get('duration', 0.0):.1f} s   (+{int(breakdown.get('duration_money', 0))}$)",
+            f"Destruction: {int(breakdown.get('destruction', 0))} pts   (+{int(breakdown.get('destruction_money', 0))}$)",
+            f"Total Dollars: +{coins_earned}$",
         ]
+
+        y = 170
+        for i, text in enumerate(lines):
+            color = (255, 200, 120) if i == len(lines) - 1 else (220, 230, 245)
+            self.draw_text(surface, text, self.font_medium, color, SCREEN_WIDTH // 2 - 280, y)
+            y += 48
         
-        if mission_completed:
-            result_text.append("🏆 MISSION COMPLETED! 🏆")
-        
-        y = 200
-        for text in result_text:
-            color = (255, 160, 100) if "MISSION" in text else (220, 230, 245)
-            self.draw_text(surface, text, self.font_medium, color, SCREEN_WIDTH // 2 - 100, y)
-            y += 50
-        
+
         for button in buttons:
             button.draw(surface, self.font_medium)
 
